@@ -52,14 +52,18 @@ class CCDataset(Dataset):
     def __len__(self):
         return len(self.cc_list)
 
+
 def xcorr_lag(nt):
-    nxcor = 2*nt-1
-    return torch.arange(-(nxcor//2), -(nxcor//2)+nxcor)
+    nxcor = 2 * nt - 1
+    return torch.arange(-(nxcor // 2), -(nxcor // 2) + nxcor)
+
 
 def nextpow2(i):
     n = 1
-    while n < i: n *= 2
+    while n < i:
+        n *= 2
     return n
+
 
 def FFT(x):
     """
@@ -71,15 +75,18 @@ def FFT(x):
     nfast = nextpow2(nxcor)
     return torch.fft.rfft(x, n=nfast, dim=-1)
 
+
 def FFT_NORMALIZE(x):
     """"""
+
 
 def MA(x, nma=20):
     """
     Moving average in dim=-1
     """
-    m = torch.nn.AvgPool1d(nma, stride=1, padding=nma//2)
-    return m(x.transpose(1, 0))[:, :x.shape[0]].transpose(1, 0)
+    m = torch.nn.AvgPool1d(nma, stride=1, padding=nma // 2)
+    return m(x.transpose(1, 0))[:, : x.shape[0]].transpose(1, 0)
+
 
 # def get_transform() -> callable:
 #     return torch.nn.Sequential(
@@ -91,20 +98,24 @@ class CCModel(nn.Module):
     def __init__(self, device, dt, maxlag, nma=20):
         super(CCModel, self).__init__()
         self.device = device
-        self.nlag = int(maxlag/dt)
-        self.xcor_time_axis = xcorr_lag(self.nlag)*dt
+        self.nlag = int(maxlag / dt)
+        self.xcor_time_axis = xcorr_lag(self.nlag) * dt
         self.nma = nma
 
     def forward(self, x):
         x1, x2 = x
         data1 = x1["data"].to(self.device)
         data2 = x2["data"].to(self.device)
-        print(data1.device, data2.device)
+
         # xcorr
-        nfast = data1.shape[-1]-1
+        nfast = data1.shape[-1] - 1
+
+        ## temporary solution for compelx number
+        data1 = torch.view_as_complex(data1)
+        data2 = torch.view_as_complex(data2)
         xcor_freq = torch.conj(data1) * data2
         xcor_time = torch.fft.irfft(xcor_freq, n=nfast, dim=-1)
-        xcor = torch.roll(xcor_time, nfast//2, dims=-1)[:,  nfast//2-self.nlag+1:nfast//2+self.nlag]
+        xcor = torch.roll(xcor_time, nfast // 2, dims=-1)[:, nfast // 2 - self.nlag + 1 : nfast // 2 + self.nlag]
         # moving average
         xcor = MA(xcor, nma=self.nma)
         # pick
@@ -121,7 +132,9 @@ def get_args_parser(add_help=True):
 
     parser = argparse.ArgumentParser(description="Cross-correlation using Pytorch", add_help=add_help)
     parser.add_argument("--pair-list", default="tests/pair_ridgecrest.txt", type=str, help="pair list")
-    parser.add_argument("--data-path", default="/kuafu/jxli/Data/DASEventData/Ridgecrest_South/temp3", type=str, help="data path")
+    parser.add_argument(
+        "--data-path", default="/kuafu/jxli/Data/DASEventData/Ridgecrest_South/temp3", type=str, help="data path"
+    )
     parser.add_argument("--batch-size", default=8, type=int, help="batch size")
     parser.add_argument("--workers", default=16, type=int, help="data loading workers")
     parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu Default: cuda)")
