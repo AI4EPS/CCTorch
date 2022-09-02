@@ -12,11 +12,12 @@ import utils
 
 
 class DASDataset(Dataset):
-    def __init__(self, pair_list, data_path, shared_dict, transform=None):
+    def __init__(self, pair_list, data_path, shared_dict, device="cpu", transform=None):
         self.cc_list = pd.read_csv(pair_list, header=None, names=["event1", "event2"])
         self.data_path = Path(data_path)
         self.shared_dict = shared_dict
         self.transform = transform
+        self.device = device
 
     def _read_h5(self, event):
         if event not in self.shared_dict:
@@ -27,8 +28,14 @@ class DASDataset(Dataset):
 
             if self.transform is not None:
                 ## TODO: check if GPU works and if it is faster
-                # self.shared_dict[event] = self.transform(data.cuda()).cpu()
-                self.shared_dict[event] = self.transform(data)
+                if self.device == "cpu":
+                    self.shared_dict[event] = self.transform(data)
+                elif self.device == "cuda":
+                    num_gpu = torch.cuda.device_count()
+                    worker_id = torch.utils.data.get_worker_info().id
+                    self.shared_dict[event] = self.transform(data.cuda(worker_id % num_gpu)).cpu()
+                else:
+                    raise
 
         return self.shared_dict[event]
 
@@ -95,6 +102,7 @@ def main(args):
         utils.mkdir(args.output_dir)
 
     utils.init_distributed_mode(args)
+    print(args)
 
     device = torch.device(args.device)
     manager = Manager()
@@ -104,21 +112,28 @@ def main(args):
 
     pair_list = args.pair_list
     data_path = args.data_path
-    dataset = DASDataset(pair_list, data_path, shared_dict, transform=transform)
+    dataset = DASDataset(pair_list, data_path, shared_dict, device=args.device, transform=transform)
 
     if args.distributed:
         sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=False)
     else:
         sampler = torch.utils.data.SequentialSampler(dataset)
 
-    loader = DataLoader(dataset, batch_size=args.batch_size, num_workers=args.workers, sampler=sampler, pin_memory=True)
+    dataloader = DataLoader(
+        dataset, batch_size=args.batch_size, num_workers=args.workers, sampler=sampler, pin_memory=True
+    )
 
     ## TODO: check if DataParallel is better for dataset memory
-    ## model= nn.DataParallel(model)
     ccmodel = CCModel(device=args.device)
     ccmodel.to(device)
+    if args.distributed:
+        # ccmodel = torch.nn.parallel.DistributedDataParallel(ccmodel, device_ids=[args.gpu])
+        # model_without_ddp = ccmodel.module
+        pass
+    else:
+        ccmodel = nn.DataParallel(ccmodel)
 
-    for x in loader:
+    for x in dataloader:
         print(x[0]["data"].shape)
         print(x[1]["data"].shape)
         y = ccmodel(x)
