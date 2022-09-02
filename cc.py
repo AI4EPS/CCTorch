@@ -112,6 +112,9 @@ def main(args):
         sampler = torch.utils.data.SequentialSampler(dataset)
 
     loader = DataLoader(dataset, batch_size=args.batch_size, num_workers=args.workers, sampler=sampler, pin_memory=True)
+
+    ## TODO: check if DataParallel is better for dataset memory
+    ## model= nn.DataParallel(model)
     ccmodel = CCModel(device=args.device)
     ccmodel.to(device)
 
