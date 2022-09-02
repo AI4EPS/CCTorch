@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, Dataset
 import utils
 
 
-class DASDataset(Dataset):
+class CCDataset(Dataset):
     def __init__(self, pair_list, data_path, shared_dict, device="cpu", transform=None):
         self.cc_list = pd.read_csv(pair_list, header=None, names=["event1", "event2"])
         self.data_path = Path(data_path)
@@ -112,7 +112,7 @@ def main(args):
 
     pair_list = args.pair_list
     data_path = args.data_path
-    dataset = DASDataset(pair_list, data_path, shared_dict, device=args.device, transform=transform)
+    dataset = CCDataset(pair_list, data_path, shared_dict, device=args.device, transform=transform)
 
     if args.distributed:
         sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=False)
