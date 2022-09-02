@@ -19,7 +19,7 @@ class DASDataset(Dataset):
         self.transform = transform
         self.device = device
 
-    def _read_h5(self, event):
+    def _read_das(self, event):
         if event not in self.shared_dict:
             print("Adding {} to shared_dict".format(event))
             with h5py.File(self.data_path / event, "r") as fp:
@@ -41,8 +41,8 @@ class DASDataset(Dataset):
 
     def __getitem__(self, index):
         event1, event2 = self.cc_list.iloc[index]
-        data1 = self._read_h5(event1)
-        data2 = self._read_h5(event2)
+        data1 = self._read_das(event1)
+        data2 = self._read_das(event2)
 
         return {"event": event1, "data": data1}, {"event": event2, "data": data2}
 
