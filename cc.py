@@ -1,12 +1,14 @@
+from multiprocessing import Manager
+from pathlib import Path
+
+import h5py
+import pandas as pd
 import torch
 import torch.nn as nn
 import torchvision.transforms as T
 from torch.utils.data import DataLoader, Dataset
-import pandas as pd
-import h5py
-from pathlib import Path
+
 import utils
-from multiprocessing import Manager
 
 
 class DASDataset(Dataset):
@@ -25,9 +27,9 @@ class DASDataset(Dataset):
 
             if self.transform is not None:
                 ## TODO: check if GPU works and if it is faster
-                ## data = data.cuda()
+                # self.shared_dict[event] = self.transform(data.cuda()).cpu()
                 self.shared_dict[event] = self.transform(data)
-                ## data = data.cpu()
+
         return self.shared_dict[event]
 
     def __getitem__(self, index):
@@ -64,7 +66,7 @@ class CCModel(nn.Module):
         print(data1.device, data2.device)
         ## TODO: Implement CC
 
-        ## TODO: Discuss return values
+        ## TODO: Discuss return data format
         # return {"dt": [], "cc": []}
 
 
@@ -73,19 +75,22 @@ def get_args_parser(add_help=True):
 
     parser = argparse.ArgumentParser(description="Cross-correlation using Pytorch", add_help=add_help)
     parser.add_argument("--pair-list", default="tests/pairs.txt", type=str, help="pair list")
-    parser.add_argument("--data-path", default="tests/data", type=str, help="data path")
+    parser.add_argument("--data-path", default="/kuafu/EventData/Mammoth_south/data", type=str, help="data path")
     parser.add_argument("--batch-size", default=8, type=int, help="batch size")
     parser.add_argument("--workers", default=16, type=int, help="data loading workers")
     parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu Default: cuda)")
+    parser.add_argument("--output-dir", default=".", type=str, help="path to save outputs")
+
     # distributed training parameters
     parser.add_argument("--world-size", default=1, type=int, help="number of distributed processes")
     parser.add_argument("--dist-url", default="env://", type=str, help="url used to set up distributed training")
-    parser.add_argument("--output-dir", default=".", type=str, help="path to save outputs")
+
     ## TODO: Add more arguments for visualization, data processing, etc
     return parser
 
 
 def main(args):
+
     if args.output_dir:
         utils.mkdir(args.output_dir)
 
@@ -114,10 +119,11 @@ def main(args):
         print(x[0]["data"].shape)
         print(x[1]["data"].shape)
         y = ccmodel(x)
-
+        ## TODO: ADD post-processing
         ## TODO: Add visualization
 
 
 if __name__ == "__main__":
+    torch.multiprocessing.set_start_method("spawn")
     args = get_args_parser().parse_args()
     main(args)
