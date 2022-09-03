@@ -35,6 +35,6 @@ class CCModel(nn.Module):
         imax[ineg] = imin[ineg]
         return {"cc": vmax, "dt": self.xcor_time_axis[imax]}
     
-    def moving_average(x, nma=20):
+    def moving_average(self, x, nma=20):
         m = torch.nn.AvgPool1d(nma, stride=1, padding=nma // 2)
-        return m(x.permute(2, 1))[:, :, :x.shape[1]].transpose(2, 1)
+        return m(x.permute(0, 2, 1))[:, :, :x.shape[1]].permute(0, 2, 1)
