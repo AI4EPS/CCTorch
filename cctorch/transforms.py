@@ -26,6 +26,11 @@ def FFT(x):
 
 def FFT_NORMALIZE(x):
     """"""
+    x[:] = FFT(x)
+    mean = torch.mean(x, dim=-1, keepdims=True)
+    std = torch.std(x, dim=-1, keepdims=True, unbiased=False)
+    x[:] = ((x-mean) / std) / torch.sqrt(torch.Tensor([x.shape[-1]]))
+    return x
 
 
 def MA(x, nma=20):
