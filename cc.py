@@ -13,7 +13,7 @@ import utils
 
 class CCDataset(Dataset):
     def __init__(self, pair_list, data_path, shared_dict, device="cpu", transform=None):
-        self.cc_list = pd.read_csv(pair_list, header=None, names=["event1", "event2"])
+        self.cc_list = pd.read_csv(pair_list, header=None, names=["event1", "event2"]).iloc[:10]
         self.data_path = Path(data_path)
         self.shared_dict = shared_dict
         self.transform = transform
@@ -71,15 +71,19 @@ def FFT(x):
     nfast = nextpow2(nxcor)
     return torch.fft.rfft(x, n=nfast, dim=-1)
 
-def FFT_NORMALIZE(x):
-    """"""
+def fft_normalize(x):
+    x[:] = FFT(x)
+    mean = torch.mean(x, dim=-1, keepdims=True)
+    std = torch.std(x, dim=-1, keepdims=True, unbiased=False)
+    x[:] = ((x-mean) / std) / torch.sqrt(torch.Tensor([x.shape[-1]]))
+    return x
 
 def MA(x, nma=20):
     """
     Moving average in dim=-1
     """
     m = torch.nn.AvgPool1d(nma, stride=1, padding=nma//2)
-    return m(x.transpose(1, 0))[:, :x.shape[0]].transpose(1, 0)
+    return m(x.permute(0, 2, 1))[:, :, :x.shape[0]].permute(0, 2, 1)
 
 # def get_transform() -> callable:
 #     return torch.nn.Sequential(
@@ -99,12 +103,11 @@ class CCModel(nn.Module):
         x1, x2 = x
         data1 = x1["data"].to(self.device)
         data2 = x2["data"].to(self.device)
-        print(data1.device, data2.device)
         # xcorr
         nfast = data1.shape[-1]-1
         xcor_freq = torch.conj(data1) * data2
         xcor_time = torch.fft.irfft(xcor_freq, n=nfast, dim=-1)
-        xcor = torch.roll(xcor_time, nfast//2, dims=-1)[:,  nfast//2-self.nlag+1:nfast//2+self.nlag]
+        xcor = torch.roll(xcor_time, nfast//2, dims=-1)[:, :, nfast//2-self.nlag+1:nfast//2+self.nlag]
         # moving average
         xcor = MA(xcor, nma=self.nma)
         # pick
