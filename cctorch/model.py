@@ -18,11 +18,10 @@ class CCModel(nn.Module):
         data2 = x2["data"].to(self.device)
 
         # xcorr
-        nfast = data1.shape[-1] - 1
-
         ## temporary solution for compelx number
         data1 = torch.view_as_complex(data1)
         data2 = torch.view_as_complex(data2)
+        nfast = data1.shape[-1] - 1
         xcor_freq = torch.conj(data1) * data2
         xcor_time = torch.fft.irfft(xcor_freq, n=nfast, dim=-1)
         xcor = torch.roll(xcor_time, nfast // 2, dims=-1)[:, nfast // 2 - self.nlag + 1 : nfast // 2 + self.nlag]
