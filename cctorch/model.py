@@ -26,7 +26,7 @@ class CCModel(nn.Module):
         xcor_time = torch.fft.irfft(xcor_freq, n=nfast, dim=-1)
         xcor = torch.roll(xcor_time, nfast // 2, dims=-1)[:, nfast // 2 - self.nlag + 1 : nfast // 2 + self.nlag]
         # moving average
-        xcor = MA(xcor, nma=self.nma)
+        xcor = self.moving_average(xcor, nma=self.nma)
         # pick
         vmax, imax = torch.max(xcor, dim=1)
         vmin, imin = torch.min(xcor, dim=1)
@@ -34,3 +34,7 @@ class CCModel(nn.Module):
         vmax[ineg] = vmin[ineg]
         imax[ineg] = imin[ineg]
         return {"cc": vmax, "dt": self.xcor_time_axis[imax]}
+    
+    def moving_average(x, nma=20):
+        m = torch.nn.AvgPool1d(nma, stride=1, padding=nma // 2)
+        return m(x.permute(2, 1))[:, :, :x.shape[1]].transpose(2, 1)
