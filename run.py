@@ -9,7 +9,18 @@ import torchvision.transforms as T
 from torch.utils.data import DataLoader
 
 import utils
-from cctorch import FFT, CCDataset, CCModel
+from cctorch import CCDataset, CCModel, fft_normalize
+
+
+def write_xcor_to_csv(result, path_result):
+    nbatch = len(result["id1"])
+    id1 = result["id1"].cpu().numpy()
+    id2 = result["id2"].cpu().numpy()
+    cc = result["cc"].cpu().numpy()
+    dt = result["dt"].cpu().numpy()
+    for ibatch in range(nbatch):
+        fn = f"{path_result}/{id1[ibatch]}_{id2[ibatch]}.csv"
+        pd.DataFrame({"cc": cc[ibatch, :], "dt": dt[ibatch, :]}).to_csv(fn, index=False)
 
 
 def get_args_parser(add_help=True):
@@ -23,7 +34,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--batch-size", default=8, type=int, help="batch size")
     parser.add_argument("--workers", default=16, type=int, help="data loading workers")
     parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu Default: cuda)")
-    parser.add_argument("--output-dir", default=".", type=str, help="path to save outputs")
+    parser.add_argument("--output-dir", default="tests/ridgecrest", type=str, help="path to save outputs")
 
     # distributed training parameters
     parser.add_argument("--world-size", default=1, type=int, help="number of distributed processes")
@@ -44,7 +55,7 @@ def main(args):
     device = torch.device(args.device)
     manager = Manager()
     shared_dict = manager.dict()
-    transform = T.Compose([T.Lambda(FFT)])
+    transform = T.Compose([T.Lambda(fft_normalize)])
     # transform = get_transform()
 
     pair_list = args.pair_list
@@ -73,10 +84,10 @@ def main(args):
     for x in dataloader:
         print(x[0]["data"].shape)
         print(x[1]["data"].shape)
-        y = ccmodel(x)
+        result = ccmodel(x)
+        write_xcor_to_csv(result, args.output_dir)
         ## TODO: ADD post-processing
         ## TODO: Add visualization
-
 
 if __name__ == "__main__":
     torch.multiprocessing.set_start_method("spawn")
