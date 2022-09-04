@@ -17,10 +17,7 @@ class CCDataset(Dataset):
     def _read_das(self, event):
         if event not in self.shared_dict:
             print("Adding {} to shared_dict".format(event))
-            # with h5py.File(self.data_path / event, "r") as fp:
-            #     data = fp["data"][:, :]
-            #     data = torch.from_numpy(data)
-            with h5py.File(self.data_path / event, "r") as fid:
+            with h5py.File(self.data_path / f"{event}.h5", "r") as fid:
                 data = fid["data"]["P"]["data"][:]
                 data = torch.from_numpy(data)
 
