@@ -18,7 +18,7 @@ def fft_real(x):
     assume fft axis in dim=-1
     """
     ntime = x.shape[-1]
-    nfast = nextpow2(2*ntime-1)
+    nfast = nextpow2(2 * ntime - 1)
     return torch.fft.rfft(x, n=nfast, dim=-1)
 
 

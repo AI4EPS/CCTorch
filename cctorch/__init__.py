@@ -1,4 +1,4 @@
-from .data import CCDataset
+from .data import CCDataset, CCIterableDataset
 from .model import CCModel
-from .transforms import *
 from .postprocess import *
+from .transforms import *

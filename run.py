@@ -9,13 +9,20 @@ import torchvision.transforms as T
 from torch.utils.data import DataLoader
 
 import utils
-from cctorch import CCDataset, CCModel, fft_normalize, write_xcor_to_csv
+from cctorch import (
+    CCDataset,
+    CCIterableDataset,
+    CCModel,
+    data,
+    fft_normalize,
+    write_xcor_to_csv,
+)
 
 
 def get_args_parser(add_help=True):
     import argparse
 
-    parser = argparse.ArgumentParser(description="Cross-correlation using Pytorch", add_help=add_help)
+    parser = argparse.ArgumentParser(description="Cross-Correlation using Pytorch", add_help=add_help)
     parser.add_argument(
         "--pair-list", default="/home/jxli/packages/CCTorch/tests/pair_more.txt", type=str, help="pair list"
     )
@@ -55,9 +62,28 @@ def main(args):
     rank = utils.get_rank() if args.distributed else 0
     world_size = utils.get_world_size() if args.distributed else 1
 
-    dataset = CCDataset(
-        pair_list, data_path, shared_dict, device=args.device, transform=transform, rank=rank, world_size=world_size
+    # dataset = CCDataset(
+    #     pair_list, data_path, shared_dict, device=args.device, transform=transform, rank=rank, world_size=world_size
+    # )
+
+    pair_list = pd.read_csv(pair_list, header=None, names=["event1", "event2"])
+    data_list1 = list(set(pair_list["event1"].tolist()))
+    data_list2 = data_list1
+    block_size1 = len(data_list1) // 2
+    block_size2 = len(data_list2) // 2
+    dataset = CCIterableDataset(
+        data_list1=data_list1,
+        data_list2=data_list2,
+        block_size1=block_size1,
+        block_size2=block_size2,
+        data_path=data_path,
+        shared_dict=shared_dict,
+        device=args.device,
+        transform=transform,
+        rank=rank,
+        world_size=world_size,
     )
+    # print(f"{len(dataset) = }")
 
     if args.distributed:
         sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=False)
@@ -70,8 +96,8 @@ def main(args):
         # num_workers=args.workers,
         batch_size=None,
         num_workers=0,
-        sampler=sampler,
-        # sampler=None,
+        # sampler=sampler,
+        sampler=None,
         # pin_memory=True
         pin_memory=False,
     )
