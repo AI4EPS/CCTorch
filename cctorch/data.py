@@ -8,7 +8,7 @@ from torch.utils.data import Dataset
 
 class CCDataset(Dataset):
     def __init__(self, pair_list, data_path, shared_dict, device="cpu", transform=None, rank=0, world_size=1, **kwargs):
-        self.cc_list = pd.read_csv(pair_list, header=None, names=["event1", "event2"]).iloc[rank::world_size]
+        self.cc_list = pd.read_csv(pair_list, header=None, names=["event1", "event2"])  # .iloc[rank::world_size]
         self.data_path = Path(data_path)
         self.shared_dict = shared_dict
         self.local_dict = {}

@@ -71,6 +71,7 @@ def main(args):
         batch_size=None,
         num_workers=0,
         sampler=sampler,
+        # sampler=None,
         # pin_memory=True
         pin_memory=False,
     )
