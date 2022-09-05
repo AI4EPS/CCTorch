@@ -81,7 +81,8 @@ def main(args):
     else:
         ccmodel = nn.DataParallel(ccmodel)
 
-    for x in dataloader:
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    for x in metric_logger.log_every(dataloader, 100, "CC: "):
         print(x[0]["data"].shape)
         print(x[1]["data"].shape)
         result = ccmodel(x)
