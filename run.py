@@ -17,7 +17,7 @@ def get_args_parser(add_help=True):
 
     parser = argparse.ArgumentParser(description="Cross-correlation using Pytorch", add_help=add_help)
     parser.add_argument(
-        "--pair-list", default="/home/jxli/packages/CCTorch/tests/pair_ridgecrest.txt", type=str, help="pair list"
+        "--pair-list", default="/home/jxli/packages/CCTorch/tests/pair_more.txt", type=str, help="pair list"
     )
     parser.add_argument(
         "--data-path", default="/kuafu/jxli/Data/DASEventData/Ridgecrest_South/temp3", type=str, help="data path"
@@ -51,7 +51,13 @@ def main(args):
 
     pair_list = args.pair_list
     data_path = args.data_path
-    dataset = CCDataset(pair_list, data_path, shared_dict, device=args.device, transform=transform)
+
+    rank = utils.get_rank() if args.distributed else 0
+    world_size = utils.get_world_size() if args.distributed else 1
+
+    dataset = CCDataset(
+        pair_list, data_path, shared_dict, device=args.device, transform=transform, rank=rank, world_size=world_size
+    )
 
     if args.distributed:
         sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=False)
@@ -59,25 +65,32 @@ def main(args):
         sampler = torch.utils.data.SequentialSampler(dataset)
 
     dataloader = DataLoader(
-        dataset, batch_size=args.batch_size, num_workers=args.workers, sampler=sampler, pin_memory=True
+        dataset,
+        # batch_size=args.batch_size,
+        # num_workers=args.workers,
+        batch_size=None,
+        num_workers=0,
+        sampler=sampler,
+        # pin_memory=True
+        pin_memory=False,
     )
 
     ## TODO: check if DataParallel is better for dataset memory
-    ccmodel = CCModel(device=args.device, dt=0.01, maxlag=0.3)
+    ccmodel = CCModel(device=args.device, to_device=False, batching=None, dt=0.01, maxlag=0.3)
     ccmodel.to(device)
-    if args.distributed:
-        # ccmodel = torch.nn.parallel.DistributedDataParallel(ccmodel, device_ids=[args.gpu])
-        # model_without_ddp = ccmodel.module
-        pass
-    else:
-        ccmodel = nn.DataParallel(ccmodel)
+    # if args.distributed:
+    #     # ccmodel = torch.nn.parallel.DistributedDataParallel(ccmodel, device_ids=[args.gpu])
+    #     # model_without_ddp = ccmodel.module
+    #     pass
+    # else:
+    #     ccmodel = nn.DataParallel(ccmodel)
 
     metric_logger = utils.MetricLogger(delimiter="  ")
     for x in metric_logger.log_every(dataloader, 10, "CC: "):
         # print(x[0]["data"].shape)
         # print(x[1]["data"].shape)
         result = ccmodel(x)
-        write_xcor_to_csv(result, args.output_dir)
+        # write_xcor_to_csv(result, args.output_dir)
         ## TODO: ADD post-processing
         ## TODO: Add visualization
 
