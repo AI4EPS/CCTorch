@@ -1,4 +1,4 @@
-Cross-correlation using Pytorch
+# Cross-correlation using Pytorch
 
 ## Single GPU
 python run.py
