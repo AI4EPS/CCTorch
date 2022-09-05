@@ -9,25 +9,16 @@ import torchvision.transforms as T
 from torch.utils.data import DataLoader
 
 import utils
-from cctorch import CCDataset, CCModel, fft_normalize
-
-
-def write_xcor_to_csv(result, path_result):
-    nbatch = len(result["id1"])
-    id1 = result["id1"].cpu().numpy()
-    id2 = result["id2"].cpu().numpy()
-    cc = result["cc"].cpu().numpy()
-    dt = result["dt"].cpu().numpy()
-    for ibatch in range(nbatch):
-        fn = f"{path_result}/{id1[ibatch]}_{id2[ibatch]}.csv"
-        pd.DataFrame({"cc": cc[ibatch, :], "dt": dt[ibatch, :]}).to_csv(fn, index=False)
+from cctorch import CCDataset, CCModel, fft_normalize, write_xcor_to_csv
 
 
 def get_args_parser(add_help=True):
     import argparse
 
     parser = argparse.ArgumentParser(description="Cross-correlation using Pytorch", add_help=add_help)
-    parser.add_argument("--pair-list", default="tests/pair_ridgecrest.txt", type=str, help="pair list")
+    parser.add_argument(
+        "--pair-list", default="/home/jxli/packages/CCTorch/tests/pair_ridgecrest.txt", type=str, help="pair list"
+    )
     parser.add_argument(
         "--data-path", default="/kuafu/jxli/Data/DASEventData/Ridgecrest_South/temp3", type=str, help="data path"
     )
@@ -82,13 +73,14 @@ def main(args):
         ccmodel = nn.DataParallel(ccmodel)
 
     metric_logger = utils.MetricLogger(delimiter="  ")
-    for x in metric_logger.log_every(dataloader, 100, "CC: "):
-        print(x[0]["data"].shape)
-        print(x[1]["data"].shape)
+    for x in metric_logger.log_every(dataloader, 10, "CC: "):
+        # print(x[0]["data"].shape)
+        # print(x[1]["data"].shape)
         result = ccmodel(x)
         write_xcor_to_csv(result, args.output_dir)
         ## TODO: ADD post-processing
         ## TODO: Add visualization
+
 
 if __name__ == "__main__":
     torch.multiprocessing.set_start_method("spawn")
