@@ -117,6 +117,24 @@ def main(args):
         # result = ccmodel(x)
         dum = x
 
+    shared_dict_cuda = {}
+    for i in tqdm(range(5000), desc="to cuda"):
+        event1, event2 = cc_list.iloc[i]
+        data1 = shared_dict[event1]
+        data2 = shared_dict[event2]
+        shared_dict_cuda[event1] = data1.cuda()
+        shared_dict_cuda[event2] = data2.cuda()
+
+    ccmodel2 = CCModel(device=args.device, to_device=False, batching=False, dt=0.01, maxlag=0.3)
+    ccmodel2.to(device)
+    for i in tqdm(range(5000), desc="shared_dict cuda"):
+        event1, event2 = cc_list.iloc[i]
+        data1 = shared_dict_cuda[event1]
+        data2 = shared_dict_cuda[event2]
+        shared_dict_cuda[event1] = data1.cuda()
+        x = {"event": event1, "data": data1}, {"event": event2, "data": data2}
+        result = ccmodel2(x)
+
     for i, x in enumerate(tqdm(dataloader, desc="normal", total=5000 // args.batch_size)):
         result = ccmodel(x)
         if i >= 5000 // args.batch_size:

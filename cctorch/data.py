@@ -23,6 +23,7 @@ class CCDataset(Dataset):
 
             if self.transform is not None:
                 ## TODO: check if GPU works and if it is faster
+                # self.shared_dict[event] = self.transform(data)
                 if self.device == "cpu":
                     self.shared_dict[event] = self.transform(data)
                 elif self.device == "cuda":
@@ -38,7 +39,6 @@ class CCDataset(Dataset):
         event1, event2 = self.cc_list.iloc[index]
         data1 = self._read_das(event1)
         data2 = self._read_das(event2)
-
         return {"event": event1, "data": data1}, {"event": event2, "data": data2}
 
     def __len__(self):
