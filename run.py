@@ -69,8 +69,8 @@ def main(args):
     pair_list = pd.read_csv(pair_list, header=None, names=["event1", "event2"])
     data_list1 = list(set(pair_list["event1"].tolist()))
     data_list2 = data_list1
-    block_size1 = len(data_list1) // 2
-    block_size2 = len(data_list2) // 2
+    block_size1 = len(data_list1) // 3
+    block_size2 = len(data_list2) // 3
     dataset = CCIterableDataset(
         data_list1=data_list1,
         data_list2=data_list2,

@@ -69,12 +69,18 @@ class CCIterableDataset(IterableDataset):
         **kwargs,
     ):
         super(CCIterableDataset).__init__()
-        self.group1 = [list(x) for x in np.array_split(data_list1, len(data_list1) // block_size1)[rank::world_size]]
-        self.group2 = [list(x) for x in np.array_split(data_list2, len(data_list2) // block_size2)[rank::world_size]]
         self.data_list1 = data_list1
         self.data_list2 = data_list2
+        self.group1 = [list(x) for x in np.array_split(data_list1, len(data_list1) // block_size1)]
+        self.group2 = [list(x) for x in np.array_split(data_list2, len(data_list2) // block_size2)]
         self.block_size1 = block_size1
         self.block_size2 = block_size2
+        if len(self.group1) > len(self.group2):
+            self.group1, self.group2 = self.group2, self.group1
+            self.block_size1, self.block_size2 = self.block_size2, self.block_size1
+        self.block_index = [(i, j) for i in range(len(self.group1)) for j in range(i, len(self.group2))][
+            rank::world_size
+        ]
         self.data_path = Path(data_path)
         self.shared_dict = shared_dict
         self.transform = transform
@@ -94,12 +100,12 @@ class CCIterableDataset(IterableDataset):
         #         self.group2[np.array_split(np.arange(len(self.group2)), num_workers)[worker_id]],
         #     )
         # )
-        return iter(self.sample(self.group1, self.group2))
+        return iter(self.sample(self.block_index))
 
     def _read_das(self, event, local_dict):
 
         if event not in local_dict:
-            print("Adding {} to local_dict".format(event))
+            # print("Adding {} to local_dict".format(event))
             with h5py.File(self.data_path / f"{event}.h5", "r") as fid:
                 data = fid["data"]["P"]["data"][:]
                 data = torch.from_numpy(data)
@@ -109,25 +115,26 @@ class CCIterableDataset(IterableDataset):
 
         return local_dict[event]
 
-    def sample(self, group1, group2):
-        if len(group1) > len(group2):
-            group1, group2 = group2, group1
-        for i in range(len(group1)):
-            for j in range(i, len(group2)):
-                local_dict = {}
-                if len(group1[i]) > len(group2[j]):
-                    event1, event2 = group2[i], group1[j]
-                else:
-                    event1, event2 = group1[i], group2[j]
-                # print(f"{len(event1) = }, {len(event2) = }")
-                for ii in range(len(event1)):
-                    for jj in range(ii + 1, len(event2)):
-                        # print(f"{ii = }, {jj = }")
-                        data1 = self._read_das(event1[ii], local_dict)
-                        data2 = self._read_das(event2[jj], local_dict)
-                        yield {"event": event1[ii], "data": data1}, {"event": event2[jj], "data": data2}
-                del local_dict
-                torch.cuda.empty_cache()
+    def sample(self, block_index):
+        for i, j in block_index:
+            local_dict = {}
+            if len(self.group1[i]) > len(self.group2[j]):
+                event1, event2 = self.group2[i], self.group1[j]
+            else:
+                event1, event2 = self.group1[i], self.group2[j]
+            # print(f"{len(event1) = }, {len(event2) = }")
+            for ii in range(len(event1)):
+                for jj in range(ii + 1, len(event2)):
+                    # print(f"{ii = }, {jj = }")
+                    data1 = self._read_das(event1[ii], local_dict)
+                    data2 = self._read_das(event2[jj], local_dict)
+                    yield {"event": event1[ii], "data": data1}, {"event": event2[jj], "data": data2}
+
+            # keys = list(local_dict.keys())
+            # for k in keys:
+            #     del local_dict[k]
+            del local_dict
+            torch.cuda.empty_cache()
 
     def __len__(self):
         short_list = min(len(self.data_list1), len(self.data_list2))
