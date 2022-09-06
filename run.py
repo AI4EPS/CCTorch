@@ -29,6 +29,9 @@ def get_args_parser(add_help=True):
     parser.add_argument(
         "--data-path", default="/kuafu/jxli/Data/DASEventData/Ridgecrest_South/temp3", type=str, help="data path"
     )
+    parser.add_argument(
+        "--mode", default="differential_time", type=str, help="mode for tasks of differential_time, template_matching, and ambient_noise"
+    )
     parser.add_argument("--batch-size", default=8, type=int, help="batch size")
     parser.add_argument("--workers", default=16, type=int, help="data loading workers")
     parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu Default: cuda)")
