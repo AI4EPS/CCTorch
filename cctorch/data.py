@@ -124,7 +124,8 @@ class CCIterableDataset(IterableDataset):
                 event1, event2 = self.group1[i], self.group2[j]
             # print(f"{len(event1) = }, {len(event2) = }")
             for ii in range(len(event1)):
-                for jj in range(ii + 1, len(event2)):
+                begin = ii + 1 if i == j else 1
+                for jj in range(begin, len(event2)):
                     # print(f"{ii = }, {jj = }")
                     data1 = self._read_das(event1[ii], local_dict)
                     data2 = self._read_das(event2[jj], local_dict)

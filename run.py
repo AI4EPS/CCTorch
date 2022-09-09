@@ -30,7 +30,10 @@ def get_args_parser(add_help=True):
         "--data-path", default="/kuafu/jxli/Data/DASEventData/Ridgecrest_South/temp3", type=str, help="data path"
     )
     parser.add_argument(
-        "--mode", default="differential_time", type=str, help="mode for tasks of differential_time, template_matching, and ambient_noise"
+        "--mode",
+        default="differential_time",
+        type=str,
+        help="mode for tasks of differential_time, template_matching, and ambient_noise",
     )
     parser.add_argument("--batch-size", default=8, type=int, help="batch size")
     parser.add_argument("--workers", default=16, type=int, help="data loading workers")
@@ -116,7 +119,7 @@ def main(args):
     #     ccmodel = nn.DataParallel(ccmodel)
 
     metric_logger = utils.MetricLogger(delimiter="  ")
-    for x in metric_logger.log_every(dataloader, 10, "CC: "):
+    for x in metric_logger.log_every(dataloader, 100, "CC: "):
         # print(x[0]["data"].shape)
         # print(x[1]["data"].shape)
         result = ccmodel(x)
