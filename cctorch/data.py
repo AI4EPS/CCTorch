@@ -119,12 +119,12 @@ class CCIterableDataset(IterableDataset):
         for i, j in block_index:
             local_dict = {}
             if len(self.group1[i]) > len(self.group2[j]):
-                event1, event2 = self.group2[i], self.group1[j]
+                event1, event2 = self.group2[j], self.group1[i]
             else:
                 event1, event2 = self.group1[i], self.group2[j]
             # print(f"{len(event1) = }, {len(event2) = }")
             for ii in range(len(event1)):
-                begin = ii + 1 if i == j else 1
+                begin = ii+1 if i == j else 0
                 for jj in range(begin, len(event2)):
                     # print(f"{ii = }, {jj = }")
                     data1 = self._read_das(event1[ii], local_dict)
