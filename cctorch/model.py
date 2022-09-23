@@ -12,7 +12,7 @@ class CCModel(nn.Module):
         self.nlag = int(maxlag / dt)
         self.nma = nma
         self.channel_shift = channel_shift
-        self.reduct_t = reduce_t
+        self.reduce_t = reduce_t
         self.reduce_x = reduce_x
 
     def forward(self, x):
@@ -56,9 +56,9 @@ class CCModel(nn.Module):
                 ineg = torch.abs(vmin) > vmax
                 vmax[ineg] = vmin[ineg]
                 imax[ineg] = imin[ineg]
-            return {"id1": event1, "id2": event2, "cc": vmax, "dt": (imax - self.nlag + 1) * self.dt}
+            return {"id1": event1, "id2": event2, "cc": vmax, "dt": (imax - self.nlag + 1) * self.dt, "channel_shift": self.channel_shift}
         else:
-            return {"id1": event1, "id2": event2, "cc": xcor, "dt": self.dt}
+            return {"id1": event1, "id2": event2, "cc": xcor, "dt": self.dt, "channel_shift": self.channel_shift}
 
     def moving_average(self, x, nma=20):
         m = torch.nn.AvgPool1d(nma, stride=1, padding=nma // 2)
