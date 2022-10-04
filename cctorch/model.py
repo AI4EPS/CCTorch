@@ -41,6 +41,14 @@ class CCModel(nn.Module):
             data2 = torch.view_as_complex(data2)
             event1 = x1["event"]
             event2 = x2["event"]
+        
+#         ## using conv1d
+#         nb1, nc1, nt1 = data1.shape
+#         data1 = data1.view(1, nb1 * nc1, nt1)
+#         nb2, nc2, nt2 = data2.shape
+#         data2 = data2.view(nb2 * nc2, 1, nt2)
+#         xcor_time = F.conv1d(data1, data2, padding=nt1 // 2, groups=nb1 * nc1)
+#         xcor_time = xcor_time.view(nb2, nc2, -1)
 
         # xcorr
         nfast = (data1.shape[-1] - 1) * 2
