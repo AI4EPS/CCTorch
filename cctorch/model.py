@@ -47,7 +47,8 @@ class CCModel(nn.Module):
 #         data1 = data1.view(1, nb1 * nc1, nt1)
 #         nb2, nc2, nt2 = data2.shape
 #         data2 = data2.view(nb2 * nc2, 1, nt2)
-#         xcor_time = F.conv1d(data1, data2, padding=nt1 // 2, groups=nb1 * nc1)
+#         assert nt2 <= nt1
+#         xcor_time = F.conv1d(data1, data2, padding="same", groups=nb1 * nc1)
 #         xcor_time = xcor_time.view(nb2, nc2, -1)
 
         # xcorr
