@@ -75,9 +75,9 @@ class CCIterableDataset(IterableDataset):
         self.group2 = [list(x) for x in np.array_split(data_list2, len(data_list2) // block_size2)]
         self.block_size1 = block_size1
         self.block_size2 = block_size2
-        if len(self.group1) > len(self.group2):
-            self.group1, self.group2 = self.group2, self.group1
-            self.block_size1, self.block_size2 = self.block_size2, self.block_size1
+        # if len(self.group1) > len(self.group2):
+        #     self.group1, self.group2 = self.group2, self.group1
+        #     self.block_size1, self.block_size2 = self.block_size2, self.block_size1
         self.block_index = [(i, j) for i in range(len(self.group1)) for j in range(i, len(self.group2))][
             rank::world_size
         ]
@@ -106,30 +106,34 @@ class CCIterableDataset(IterableDataset):
 
         if event not in local_dict:
             # print("Adding {} to local_dict".format(event))
-            with h5py.File(self.data_path / f"{event}.h5", "r") as fid:
-                data = fid["data"]["P"]["data"][:]
-                data = torch.from_numpy(data)
-
+            #with h5py.File(self.data_path / f"{event}.h5", "r") as fid:
+            #    data = fid["data"]["P"]["data"][:]
+            #    data = torch.from_numpy(data)
+            data_list, info_list = read_das_eventphase_data_h5(self.data_path / f"{event}.h5", phase="P", event=True, dataset_keys=["shift_index"])
+            data = torch.from_numpy(data_list[0])
+            info = info_list[0]
             if self.transform is not None:
-                local_dict[event] = self.transform(data.cuda())
+                local_dict[event] = (self.transform(data.cuda()), info)
 
         return local_dict[event]
 
     def sample(self, block_index):
         for i, j in block_index:
             local_dict = {}
-            if len(self.group1[i]) > len(self.group2[j]):
-                event1, event2 = self.group2[j], self.group1[i]
-            else:
-                event1, event2 = self.group1[i], self.group2[j]
+            # if len(self.group1[i]) > len(self.group2[j]):
+            #     event1, event2 = self.group2[j], self.group1[i]
+            # else:
+            #     event1, event2 = self.group1[i], self.group2[j]
+            event1, event2 = self.group1[i], self.group2[j]
             # print(f"{len(event1) = }, {len(event2) = }")
             for ii in range(len(event1)):
-                begin = ii+1 if i == j else 0
+                begin = ii if i == j else 0
                 for jj in range(begin, len(event2)):
                     # print(f"{ii = }, {jj = }")
-                    data1 = self._read_das(event1[ii], local_dict)
-                    data2 = self._read_das(event2[jj], local_dict)
-                    yield {"event": event1[ii], "data": data1}, {"event": event2[jj], "data": data2}
+                    data_tuple1 = self._read_das(event1[ii], local_dict)
+                    data_tuple2 = self._read_das(event2[jj], local_dict)
+                    yield {"event": event1[ii], "data": data_tuple1[0], "event_time": data_tuple1[1]["event"]["event_time"], "shift_index": data_tuple1[1]["shift_index"]}, \
+                        {"event": event2[jj], "data": data_tuple2[0], "event_time": data_tuple2[1]["event"]["event_time"], "shift_index": data_tuple2[1]["shift_index"]}
 
             # keys = list(local_dict.keys())
             # for k in keys:
@@ -140,3 +144,49 @@ class CCIterableDataset(IterableDataset):
     def __len__(self):
         short_list = min(len(self.data_list1), len(self.data_list2))
         return len(self.data_list1) * len(self.data_list2) - short_list * (short_list + 1) // 2
+
+# helper reading functions
+def read_das_eventphase_data_h5(fn, phase=None, event=False, dataset_keys=None, attrs_only=False):
+    """
+    read event phase data from hdf5 file
+    Args:
+        fn:  hdf5 filename
+        phase: phase name list, e.g. ['P', 'S']
+        dataset_keys: event phase data attributes, e.g. ['snr', 'traveltime', 'shift_index']
+        event: if True, return event dict in info_list[0]
+    Returns:
+        data_list: list of event phase data
+        info_list: list of event phase info
+    """
+    if isinstance(phase, str):
+        phase = [phase]
+    data_list = []
+    info_list = []
+    with h5py.File(fn, 'r') as fid:
+        g_phases = fid['data']
+        phase_avail = g_phases.keys()
+        if phase is None:
+            phase = list(phase_avail)
+        for phase_name in phase:
+            if not phase_name in g_phases.keys():
+                raise(f"{fn} does not have phase: {phase_name}")
+            g_phase = g_phases[phase_name]
+            if attrs_only:
+                data = []
+            else:
+                data = g_phase['data'][:]
+            info = {}
+            for key in g_phase['data'].attrs.keys():
+                info[key] = g_phases[phase_name]['data'].attrs[key]
+            if dataset_keys is not None:
+                for key in dataset_keys:
+                    if key in g_phase.keys():
+                        info[key] = g_phase[key][:]
+                        for kk in g_phase[key].attrs.keys():
+                            info[kk] = g_phase[key].attrs[kk]
+            data_list.append(data)
+            info_list.append(info)
+        if event:
+            event_dict = dict((key, fid['data'].attrs[key]) for key in fid['data'].attrs.keys())
+            info_list[0]['event'] = event_dict
+    return data_list, info_list
