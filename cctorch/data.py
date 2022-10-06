@@ -134,10 +134,7 @@ class CCIterableDataset(IterableDataset):
                     data_tuple2 = self._read_das(event2[jj], local_dict)
                     yield {"event": event1[ii], "data": data_tuple1[0], "event_time": data_tuple1[1]["event"]["event_time"], "shift_index": data_tuple1[1]["shift_index"]}, \
                         {"event": event2[jj], "data": data_tuple2[0], "event_time": data_tuple2[1]["event"]["event_time"], "shift_index": data_tuple2[1]["shift_index"]}
-
-            # keys = list(local_dict.keys())
-            # for k in keys:
-            #     del local_dict[k]
+            
             del local_dict
             torch.cuda.empty_cache()
 
