@@ -34,6 +34,12 @@ def fft_real_normalize(x):
     return fft_real(x)
 
 
+def normalize(x):
+    x -= torch.mean(x, dim=-1, keepdims=True)
+    x /= x.square().sum(dim=-1, keepdims=True).sqrt()
+    return x
+
+
 # torch helper functions
 def count_tensor_byte(*args):
     total_byte_size = 0
@@ -128,6 +134,21 @@ def xcorr_phase(data1, data2, dt, maxlag=0.5, channel_shift=0):
     xcor_time_axis = (xcorr_lag(nlag)*dt).numpy()
     xcor_info = {'nx': data1.shape[0], 'nt': len(xcor_time_axis), 'dt': dt, 'time_axis': xcor_time_axis}
     return xcor, xcor_info
+
+
+def xcorr_phase_conv1d(data1, data2, dt, maxlag=0.5, channel_shift=0):
+    """
+    cross-correlation in the time domain
+    """
+    data1_norm = normalize(data1)
+    data2_norm = normalize(data2)
+    nlag = int(maxlag/dt)
+    if channel_shift > 0:
+        data2_norm[:] = torch.roll(data2_norm, channel_shift, dims=-1)
+    xcor = torch.nn.functional.conv1d(data2_norm.unsqueeze(0), data1_norm.unsqueeze(1), groups=data1_norm.shape[0], padding=nlag-1)
+    xcor_time_axis = (xcorr_lag(nlag)*dt).numpy()
+    xcor_info = {'nx': data1.shape[0], 'nt': len(xcor_time_axis), 'dt': dt, 'time_axis': xcor_time_axis}
+    return xcor[0, :, :], xcor_info
 
 
 def pick_Rkt_mccc(Rkt_ij, dt, 
