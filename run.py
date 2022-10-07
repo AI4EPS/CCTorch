@@ -48,6 +48,8 @@ def get_args_parser(add_help=True):
     parser.add_argument("--path-xcor-pick", default="", type=str, help="path to save xcor pick output: path_{channel_shift}")
     parser.add_argument("--path-xcor-matrix", default="", type=str, help="path to save xcor matrix output: path_{channel_shift}")
 
+    parser.add_argument("--path-dasinfo", default="", type=str, help="csv file with das channel info")
+
     parser.add_argument(
         "--mode",
         default="differential_time",
@@ -160,7 +162,11 @@ def main(args):
         cc_matrix = torch.zeros([len(data_list1), len(data_list2)]).cuda()
         id_row = torch.tensor(data_list1).cuda()
         id_col = torch.tensor(data_list2).cuda()
-    channel_index = pd.read_csv("/kuafu/EventData/Mammoth_south/das_info.csv")['index']
+
+    if args.path_dasinfo:
+        channel_index = pd.read_csv(args.path_dasinfo)['index']
+    else:
+        channel_index = None
 
     for x in metric_logger.log_every(dataloader, 100, "CC: "):
         #print(x[0]["data"].shape)
