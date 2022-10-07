@@ -4,7 +4,7 @@ import torch
 import h5py
 from datetime import datetime, timedelta
 
-def write_xcor_to_h5(result, path_result, phase1='P', phase2='P'):
+def write_xcor_data_to_h5(result, path_result, phase1='P', phase2='P'):
     """
     Write full xcor to hdf5 file. No reduce in time and channel axis
     """
