@@ -100,15 +100,12 @@ class CCIterableDataset(IterableDataset):
         #         self.group2[np.array_split(np.arange(len(self.group2)), num_workers)[worker_id]],
         #     )
         # )
-        return iter(self.sample(self.block_index))
+        #return iter(self.sample(self.block_index))
+        return iter(self.sample(self.block_index[worker_id::num_workers]))
 
     def _read_das(self, event, local_dict):
 
         if event not in local_dict:
-            # print("Adding {} to local_dict".format(event))
-            #with h5py.File(self.data_path / f"{event}.h5", "r") as fid:
-            #    data = fid["data"]["P"]["data"][:]
-            #    data = torch.from_numpy(data)
             data_list, info_list = read_das_eventphase_data_h5(self.data_path / f"{event}.h5", phase="P", event=True, dataset_keys=["shift_index"])
             data = torch.from_numpy(data_list[0])
             info = info_list[0]
@@ -129,7 +126,7 @@ class CCIterableDataset(IterableDataset):
             for ii in range(len(event1)):
                 begin = ii if i == j else 0
                 for jj in range(begin, len(event2)):
-                    # print(f"{ii = }, {jj = }")
+                    # print(f"{i=}, {j=}, {ii=}, {jj=} {event1[ii]=}, {event2[jj]=}")
                     data_tuple1 = self._read_das(event1[ii], local_dict)
                     data_tuple2 = self._read_das(event2[jj], local_dict)
                     yield {"event": event1[ii], "data": data_tuple1[0], "event_time": data_tuple1[1]["event"]["event_time"], "shift_index": data_tuple1[1]["shift_index"]}, \
@@ -141,6 +138,7 @@ class CCIterableDataset(IterableDataset):
     def __len__(self):
         short_list = min(len(self.data_list1), len(self.data_list2))
         return len(self.data_list1) * len(self.data_list2) - short_list * (short_list + 1) // 2
+
 
 # helper reading functions
 def read_das_eventphase_data_h5(fn, phase=None, event=False, dataset_keys=None, attrs_only=False):
