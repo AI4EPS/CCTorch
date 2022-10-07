@@ -14,8 +14,12 @@ from cctorch import (
     CCIterableDataset,
     CCModel,
     data,
-    fft_normalize,
-    write_xcor_to_csv,
+    fft_real_normalize,
+    normalize,
+    interp_time_cubic_spline,
+    taper_time,
+    write_xcor_data_to_h5,
+    write_xcor_mccc_pick_to_csv,
 )
 
 
@@ -24,11 +28,24 @@ def get_args_parser(add_help=True):
 
     parser = argparse.ArgumentParser(description="Cross-Correlation using Pytorch", add_help=add_help)
     parser.add_argument(
-        "--pair-list", default="/home/jxli/packages/CCTorch/tests/pair_more.txt", type=str, help="pair list"
+        "--pair-list", default="/home/jxli/packages/CCTorch/tests/pair_mammoth_ccfm_test.txt", type=str, help="pair list"
     )
     parser.add_argument(
-        "--data-path", default="/kuafu/jxli/Data/DASEventData/Ridgecrest_South/temp3", type=str, help="data path"
+        "--data-path", default="/kuafu/jxli/Data/DASEventData/mammoth_south/temp", type=str, help="data path"
     )
+
+    # xcor parameters
+    parser.add_argument("--domain", default="time", type=str, help="time domain or frequency domain")
+    parser.add_argument("--maxlag", default=0.5, type=float, help="maximum time lag during cross-correlation")
+    parser.add_argument("--channel-shift", default=0, type=int, help="channel shift of 2nd window for cross-correlation")
+    parser.add_argument("--reduce-t", default=True, type=bool, help="reduce the time axis of xcor data")
+    parser.add_argument("--reduce-x", default=False, type=bool, help="reduce the channel axis of xcor data: only have effect when reduce_t is true")
+    parser.add_argument("--mccc", default=True, type=bool, help="use mccc to reduce time axis: only have effect when reduce_t is true")
+    parser.add_argument("--phase-type1", default="P", type=str, help="Phase type of the 1st data window")
+    parser.add_argument("--phase-type2", default="P", type=str, help="Phase type of the 2nd data window")
+    parser.add_argument("--path-xcor-data", default="xcor_data", type=str, help="path to save xcor data output: path_{channel_shift}")
+    parser.add_argument("--path-xcor-pick", default="xcor_pick", type=str, help="path to save xcor pick output: path_{channel_shift}")
+
     parser.add_argument(
         "--mode",
         default="differential_time",
@@ -38,7 +55,6 @@ def get_args_parser(add_help=True):
     parser.add_argument("--batch-size", default=8, type=int, help="batch size")
     parser.add_argument("--workers", default=16, type=int, help="data loading workers")
     parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu Default: cuda)")
-    parser.add_argument("--output-dir", default="tests/ridgecrest", type=str, help="path to save outputs")
 
     # distributed training parameters
     parser.add_argument("--world-size", default=1, type=int, help="number of distributed processes")
@@ -50,8 +66,12 @@ def get_args_parser(add_help=True):
 
 def main(args):
 
-    if args.output_dir:
-        utils.mkdir(args.output_dir)
+    if args.path_xcor_data:
+        path_xcor_data = f'{args.path_xcor_data}/{args.channel_shift}'
+        utils.mkdir(path_xcor_data)
+    if args.path_xcor_pick:
+        path_xcor_pick = f'{args.path_xcor_pick}/{args.channel_shift}'
+        utils.mkdir(path_xcor_pick)
 
     utils.init_distributed_mode(args)
     print(args)
@@ -59,7 +79,15 @@ def main(args):
     device = torch.device(args.device)
     manager = Manager()
     shared_dict = manager.dict()
-    transform = T.Compose([T.Lambda(fft_normalize)])
+    
+    if args.domain == "time":
+        transform = T.Compose([T.Lambda(taper_time),
+                            T.Lambda(interp_time_cubic_spline), 
+                            T.Lambda(normalize)])
+    elif args.domain == "frequency":
+        transform = T.Compose([T.Lambda(taper_time),
+                            T.Lambda(interp_time_cubic_spline), 
+                            T.Lambda(fft_real_normalize)])
     # transform = get_transform()
 
     pair_list = args.pair_list
@@ -109,7 +137,14 @@ def main(args):
     )
 
     ## TODO: check if DataParallel is better for dataset memory
-    ccmodel = CCModel(device=args.device, to_device=False, batching=None, dt=0.01, maxlag=0.3)
+    ccmodel = CCModel(device=args.device, to_device=False, batching=None, 
+                        dt=0.01, 
+                        maxlag=args.maxlag, 
+                        reduce_t=args.reduce_t, 
+                        reduce_x=args.reduce_x,
+                        channel_shift=args.channel_shift, 
+                        mccc=args.mccc, 
+                        domain=args.domain)
     ccmodel.to(device)
     # if args.distributed:
     #     # ccmodel = torch.nn.parallel.DistributedDataParallel(ccmodel, device_ids=[args.gpu])
@@ -119,13 +154,26 @@ def main(args):
     #     ccmodel = nn.DataParallel(ccmodel)
 
     metric_logger = utils.MetricLogger(delimiter="  ")
+    #cc_matrix = torch.zeros([len(data_list1), len(data_list2)]).cuda()
+    #id_row = torch.tensor(data_list1).cuda()
+    #id_col = torch.tensor(data_list2).cuda()
+    channel_index = pd.read_csv("/kuafu/EventData/Mammoth_south/das_info.csv")['index']
+
     for x in metric_logger.log_every(dataloader, 100, "CC: "):
         # print(x[0]["data"].shape)
         # print(x[1]["data"].shape)
         result = ccmodel(x)
+        # pick via mccc
+        write_xcor_mccc_pick_to_csv(result, x, path_xcor_pick, channel_index=channel_index)
+        write_xcor_data_to_h5(result, path_xcor_data, phase1=args.phase_type1, phase2=args.phase_type1)
+        # write_xcor_to_ccmat(result, cc_matrix, id_row, id_col)
         # write_xcor_to_csv(result, args.output_dir)
         ## TODO: ADD post-processing
         ## TODO: Add visualization
+
+    #cc_matrix = cc_matrix.cpu().numpy()
+    #import numpy as np
+    #np.savez(f'./tests/mammoth_ccmat_rank_{rank}.npz', cc=cc_matrix, id_row=data_list1, id_col=data_list2)
 
 
 if __name__ == "__main__":
