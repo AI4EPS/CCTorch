@@ -31,7 +31,7 @@ def get_args_parser(add_help=True):
         "--pair-list", default="/home/jxli/packages/CCTorch/tests/pair_mammoth_ccfm_test.txt", type=str, help="pair list"
     )
     parser.add_argument(
-        "--data-path", default="/kuafu/jxli/Data/DASEventData/mammoth_south/temp", type=str, help="data path"
+        "--path-data", default="/kuafu/jxli/Data/DASEventData/mammoth_south/temp", type=str, help="data path"
     )
 
     # xcor parameters
@@ -91,7 +91,7 @@ def main(args):
     # transform = get_transform()
 
     pair_list = args.pair_list
-    data_path = args.data_path
+    data_path = args.path_data
 
     rank = utils.get_rank() if args.distributed else 0
     world_size = utils.get_world_size() if args.distributed else 1
