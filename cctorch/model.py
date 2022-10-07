@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-import torch.nn.funtional as F
+import torch.nn.functional as F
 from .transforms import (
     interp_time_cubic_spline,
     pick_Rkt_mccc,
@@ -68,14 +68,12 @@ class CCModel(nn.Module):
         if self.reduce_t:
             # MCCC pick
             if self.mccc:
-                scale_factor = 10
+                scale_factor = 1
                 # xcor_interp = interp_time_cubic_spline(xcor[0, :, :], scale_factor=scale_factor)
-                pick_dt, G0, d0 = pick_Rkt_mccc(xcor, self.dt/scale_factor, scale_factor=1, verbose=False, cuda=True)
-                vmax, vmin, cc_dt = pick_mccc_refine(xcor, self.dt/scale_factor, pick_dt, G0=G0, d0=d0,  verbose=False)
-                vmean = torch.mean(torch.abs(vmax))
-                if self.reduce_x:
-                    result["cc_mean"] = vmean
-                else:
+                pick_dt, G0, d0 = pick_Rkt_mccc(xcor[0, :, :], self.dt/scale_factor, scale_factor=1, verbose=False, cuda=True)
+                vmax, vmin, cc_dt = pick_mccc_refine(xcor[0, :, :], self.dt/scale_factor, pick_dt, G0=G0, d0=d0,  verbose=False)
+                result["cc_mean"] = torch.mean(torch.abs(vmax))
+                if not self.reduce_x:
                     result["cc_main"] = vmax
                     result["cc_side"] = vmin
                     result["cc_dt"] = cc_dt
