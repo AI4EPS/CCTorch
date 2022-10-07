@@ -50,7 +50,10 @@ class CCModel(nn.Module):
             nb2, nc2, nt2 = data2.shape
             data2 = data2.view(nb2 * nc2, 1, nt2)
             assert nt2 <= nt1
-            xcor = F.conv1d(data1, data2, padding=self.nlag+1, groups=nb1 * nc1)
+            if self.channel_shift > 0:
+                xcor = F.conv1d(data1, torch.roll(data2, self.channel_shift, dims=-1), padding=self.nlag+1, groups=nb1 * nc1)
+            else:
+                xcor = F.conv1d(data1, data2, padding=self.nlag+1, groups=nb1 * nc1)
             xcor = xcor.view(nb1, nc1, -1)
         elif self.domain == "frequency":
             # xcorr with fft in frequency domain
