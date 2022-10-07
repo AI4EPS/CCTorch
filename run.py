@@ -20,6 +20,7 @@ from cctorch import (
     taper_time,
     write_xcor_data_to_h5,
     write_xcor_mccc_pick_to_csv,
+    write_xcor_to_ccmat
 )
 
 
@@ -38,13 +39,14 @@ def get_args_parser(add_help=True):
     parser.add_argument("--domain", default="time", type=str, help="time domain or frequency domain")
     parser.add_argument("--maxlag", default=0.5, type=float, help="maximum time lag during cross-correlation")
     parser.add_argument("--channel-shift", default=0, type=int, help="channel shift of 2nd window for cross-correlation")
-    parser.add_argument("--reduce-t", default=True, type=bool, help="reduce the time axis of xcor data")
-    parser.add_argument("--reduce-x", default=False, type=bool, help="reduce the channel axis of xcor data: only have effect when reduce_t is true")
-    parser.add_argument("--mccc", default=True, type=bool, help="use mccc to reduce time axis: only have effect when reduce_t is true")
+    parser.add_argument("--reduce-t", action='store_true', help="reduce the time axis of xcor data")
+    parser.add_argument("--reduce-x", action='store_true', help="reduce the channel axis of xcor data: only have effect when reduce_t is true")
+    parser.add_argument("--mccc", action='store_true', help="use mccc to reduce time axis: only have effect when reduce_t is true")
     parser.add_argument("--phase-type1", default="P", type=str, help="Phase type of the 1st data window")
     parser.add_argument("--phase-type2", default="P", type=str, help="Phase type of the 2nd data window")
-    parser.add_argument("--path-xcor-data", default="xcor_data", type=str, help="path to save xcor data output: path_{channel_shift}")
-    parser.add_argument("--path-xcor-pick", default="xcor_pick", type=str, help="path to save xcor pick output: path_{channel_shift}")
+    parser.add_argument("--path-xcor-data", default="", type=str, help="path to save xcor data output: path_{channel_shift}")
+    parser.add_argument("--path-xcor-pick", default="", type=str, help="path to save xcor pick output: path_{channel_shift}")
+    parser.add_argument("--path-xcor-matrix", default="", type=str, help="path to save xcor matrix output: path_{channel_shift}")
 
     parser.add_argument(
         "--mode",
@@ -67,10 +69,10 @@ def get_args_parser(add_help=True):
 def main(args):
 
     if args.path_xcor_data:
-        path_xcor_data = f'{args.path_xcor_data}/{args.channel_shift}'
+        path_xcor_data = f'{args.path_xcor_data}_{args.channel_shift}'
         utils.mkdir(path_xcor_data)
     if args.path_xcor_pick:
-        path_xcor_pick = f'{args.path_xcor_pick}/{args.channel_shift}'
+        path_xcor_pick = f'{args.path_xcor_pick}_{args.channel_shift}'
         utils.mkdir(path_xcor_pick)
 
     utils.init_distributed_mode(args)
@@ -101,7 +103,7 @@ def main(args):
     # )
 
     pair_list = pd.read_csv(pair_list, header=None, names=["event1", "event2"])
-    data_list1 = list(set(pair_list["event1"].tolist()))
+    data_list1 = sorted(list(set(pair_list["event1"].tolist())))
     data_list2 = data_list1
     block_size1 = len(data_list1) // 3
     block_size2 = len(data_list2) // 3
@@ -138,7 +140,7 @@ def main(args):
 
     ## TODO: check if DataParallel is better for dataset memory
     ccmodel = CCModel(device=args.device, to_device=False, batching=None, 
-                        dt=0.01, 
+                        dt=0.001, 
                         maxlag=args.maxlag, 
                         reduce_t=args.reduce_t, 
                         reduce_x=args.reduce_x,
@@ -154,26 +156,30 @@ def main(args):
     #     ccmodel = nn.DataParallel(ccmodel)
 
     metric_logger = utils.MetricLogger(delimiter="  ")
-    #cc_matrix = torch.zeros([len(data_list1), len(data_list2)]).cuda()
-    #id_row = torch.tensor(data_list1).cuda()
-    #id_col = torch.tensor(data_list2).cuda()
+    if args.path_xcor_matrix:
+        cc_matrix = torch.zeros([len(data_list1), len(data_list2)]).cuda()
+        id_row = torch.tensor(data_list1).cuda()
+        id_col = torch.tensor(data_list2).cuda()
     channel_index = pd.read_csv("/kuafu/EventData/Mammoth_south/das_info.csv")['index']
 
     for x in metric_logger.log_every(dataloader, 100, "CC: "):
-        # print(x[0]["data"].shape)
-        # print(x[1]["data"].shape)
+        #print(x[0]["data"].shape)
+        #print(x[1]["data"].shape)
         result = ccmodel(x)
-        # pick via mccc
-        write_xcor_mccc_pick_to_csv(result, x, path_xcor_pick, channel_index=channel_index)
-        write_xcor_data_to_h5(result, path_xcor_data, phase1=args.phase_type1, phase2=args.phase_type1)
-        # write_xcor_to_ccmat(result, cc_matrix, id_row, id_col)
-        # write_xcor_to_csv(result, args.output_dir)
+        # write xcor to file
+        if args.path_xcor_data:
+            write_xcor_data_to_h5(result, path_xcor_data, phase1=args.phase_type1, phase2=args.phase_type1)
+        if args.path_xcor_pick and args.mccc:
+            write_xcor_mccc_pick_to_csv(result, x, path_xcor_pick, channel_index=channel_index)
+        if args.path_xcor_matrix:
+            write_xcor_to_ccmat(result, cc_matrix, id_row, id_col)
         ## TODO: ADD post-processing
         ## TODO: Add visualization
 
-    #cc_matrix = cc_matrix.cpu().numpy()
-    #import numpy as np
-    #np.savez(f'./tests/mammoth_ccmat_rank_{rank}.npz', cc=cc_matrix, id_row=data_list1, id_col=data_list2)
+    if args.path_xcor_matrix:
+        import numpy as np
+        cc_matrix = cc_matrix.cpu().numpy()
+        np.savez(f'{args.path_xcor_matrix}_{args.channel_shift}_{rank}.npz', cc=cc_matrix, id_row=data_list1, id_col=data_list2)
 
 
 if __name__ == "__main__":
