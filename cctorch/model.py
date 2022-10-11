@@ -65,9 +65,9 @@ class CCModel(nn.Module):
             nb2, nc2, nt2 = data2.shape
             data2 = data2.view(nb2 * nc2, 1, nt2)
             assert nt2 <= nt1
-            if self.channel_shift > 0:
+            if self.channel_shift != 0:
                 xcor = F.conv1d(
-                    data1, torch.roll(data2, self.channel_shift, dims=-1), padding=self.nlag + 1, groups=nb1 * nc1
+                    data1, torch.roll(data2, self.channel_shift, dims=-2), padding=self.nlag + 1, groups=nb1 * nc1
                 )
             else:
                 xcor = F.conv1d(data1, data2, padding=self.nlag + 1, groups=nb1 * nc1)
@@ -75,10 +75,10 @@ class CCModel(nn.Module):
         elif self.domain == "frequency":
             # xcorr with fft in frequency domain
             nfast = (data1.shape[-1] - 1) * 2
-            if self.channel_shift > 0:
-                xcor_freq = torch.conj(data1) * torch.roll(data2, self.channel_shift, dims=-1)
+            if self.channel_shift != 0:
+                xcor_freq = data1 * torch.roll(torch.conj(data2), self.channel_shift, dims=-2)
             else:
-                xcor_freq = torch.conj(data1) * data2
+                xcor_freq = data1 * torch.conj(data2)
             xcor_time = torch.fft.irfft(xcor_freq, n=nfast, dim=-1)
             xcor = torch.roll(xcor_time, nfast // 2, dims=-1)[..., nfast // 2 - self.nlag + 1 : nfast // 2 + self.nlag]
 
