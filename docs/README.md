@@ -11,10 +11,11 @@ torchrun --standalone --nproc_per_node=8 run.py
 ## Example for mammoth south
 ```
 torchrun --standalone --nproc_per_node=4 \
-        run.py --reduce-t --mccc --channel-shift=0\
+        run.py --generate-pair --auto-xcor --reduce-t --mccc --channel-shift=0 \
         --path-data=/kuafu/jxli/Data/DASEventData/mammoth_south/temp \
         --pair-list=/home/jxli/packages/CCTorch/tests/pair_mammoth_ccfm_test.txt \
-        --path-xcor-data=/net/jin/ssd-tmp-nobak2/jxli/DASEventData/mammoth_south/temp_xcor_test/xcor_data \
-        --path-xcor-pick=/net/jin/ssd-tmp-nobak2/jxli/DASEventData/mammoth_south/temp_xcor_test/xcor_pick \
-        --path-xcor-matrix=/net/jin/ssd-tmp-nobak2/jxli/DASEventData/mammoth_south/temp_xcor_test/xcor_matrix
+        --path-xcor-data=/net/jin/ssd-tmp-nobak2/jxli/DASEventData/mammoth_south/temp_xcor_ccfm/xcor_data \
+        --path-xcor-pick=/net/jin/ssd-tmp-nobak2/jxli/DASEventData/mammoth_south/temp_xcor_ccfm/xcor_pick \
+        --path-xcor-matrix=/net/jin/ssd-tmp-nobak2/jxli/DASEventData/mammoth_south/temp_xcor_ccfm/xcor_matrix \
+        --path-dasinfo=/kuafu/EventData/Mammoth_south/das_info.csv
 ```
