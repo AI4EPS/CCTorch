@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 import torch
@@ -72,6 +73,24 @@ def write_xcor_to_ccmat(result, ccmat, id_row, id_col):
         irow = torch.where(id_row == id1)
         icol = torch.where(id_col == id2)
         ccmat[irow, icol] = result["cc_mean"]
+
+def reduce_ccmat(file_cc_matrix, channel_shift, nrank, clean=True):
+    """
+    reduce the cc matrix calculated from different cores
+    """
+    for rank in range(nrank):
+        data = np.load(f'{file_cc_matrix}_{channel_shift}_{rank}.npz')
+        if rank == 0:
+            cc = data["cc"]
+            id_row = data["id_row"]
+            id_col = data["id_col"]
+            id_pair = data["id_pair"]
+        else:
+            cc += data['cc']
+    np.savez(f'{file_cc_matrix}_{channel_shift}.npz', cc=cc, id_row=id_row, id_col=id_col, id_pair=id_pair)
+    if clean:
+        for rank in range(nrank):
+            os.remove(f'{file_cc_matrix}_{channel_shift}_{rank}.npz')
 
 # helper functions
 def write_h5(fn, dataset_name, data, attrs_dict):
