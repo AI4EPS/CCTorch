@@ -35,6 +35,11 @@ def get_args_parser(add_help=True):
         "--path-data", default="/kuafu/jxli/Data/DASEventData/mammoth_south/temp", type=str, help="data path"
     )
 
+    parser.add_argument("--block_num1", default=3, type=int, help="Number of blocks for the 1st data pair dimension")
+    parser.add_argument("--block_num2", default=3, type=int, help="Number of blocks for the 2nd data pair dimension")
+    parser.add_argument("--generate-pair", action="store_true", help="generate full pair list from data_list1 and data_list2 if turning on this option")
+    parser.add_argument("--auto-xcor", action="store_true", help="do auto-correlation for data list")
+
     # xcor parameters
     parser.add_argument("--domain", default="time", type=str, help="time domain or frequency domain")
     parser.add_argument("--maxlag", default=0.5, type=float, help="maximum time lag during cross-correlation")
@@ -104,16 +109,12 @@ def main(args):
     #     pair_list, data_path, shared_dict, device=args.device, transform=transform, rank=rank, world_size=world_size
     # )
 
-    pair_list = pd.read_csv(pair_list, header=None, names=["event1", "event2"])
-    data_list1 = sorted(list(set(pair_list["event1"].tolist())))
-    data_list2 = data_list1
-    block_size1 = len(data_list1) // 3
-    block_size2 = len(data_list2) // 3
     dataset = CCIterableDataset(
-        data_list1=data_list1,
-        data_list2=data_list2,
-        block_size1=block_size1,
-        block_size2=block_size2,
+        pair_list=pair_list,
+        generate_pair=args.generate_pair,
+        auto_xcor=args.auto_xcor,
+        block_num1=args.block_num1,
+        block_num2=args.block_num2,
         data_path=data_path,
         shared_dict=shared_dict,
         device=args.device,
@@ -159,9 +160,9 @@ def main(args):
 
     metric_logger = utils.MetricLogger(delimiter="  ")
     if args.path_xcor_matrix:
-        cc_matrix = torch.zeros([len(data_list1), len(data_list2)]).cuda()
-        id_row = torch.tensor(data_list1).cuda()
-        id_col = torch.tensor(data_list2).cuda()
+        cc_matrix = torch.zeros([len(dataset.data_list1), len(dataset.data_list2)], device=args.device)
+        id_row = torch.tensor(dataset.data_list1, device=args.device)
+        id_col = torch.tensor(dataset.data_list2, device=args.device)
 
     if args.path_dasinfo:
         channel_index = pd.read_csv(args.path_dasinfo)['index']
@@ -185,7 +186,7 @@ def main(args):
     if args.path_xcor_matrix:
         import numpy as np
         cc_matrix = cc_matrix.cpu().numpy()
-        np.savez(f'{args.path_xcor_matrix}_{args.channel_shift}_{rank}.npz', cc=cc_matrix, id_row=data_list1, id_col=data_list2)
+        np.savez(f'{args.path_xcor_matrix}_{args.channel_shift}_{rank}.npz', cc=cc_matrix, id_row=dataset.data_list1, id_col=dataset.data_list2)
 
 
 if __name__ == "__main__":
