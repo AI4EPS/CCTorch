@@ -73,16 +73,14 @@ class CCIterableDataset(IterableDataset):
         self.generate_pair = generate_pair
         self.auto_xcor = auto_xcor
         self.pairs, self.data_list1, self.data_list2 = self._read_pair(pair_list)
-        self.group1 = [list(x) for x in np.array_split(self.data_list1, block_num1) if len(x)>0]
-        self.group2 = [list(x) for x in np.array_split(self.data_list2, block_num2) if len(x)>0]
+        self.group1 = [list(x) for x in np.array_split(self.data_list1, block_num1) if len(x) > 0]
+        self.group2 = [list(x) for x in np.array_split(self.data_list2, block_num2) if len(x) > 0]
         self.block_num1 = len(self.group1)
         self.block_num2 = len(self.group2)
         # if len(self.group1) > len(self.group2):
         #     self.group1, self.group2 = self.group2, self.group1
         #     self.block_size1, self.block_size2 = self.block_size2, self.block_size1
-        self.block_index = [(i, j) for i in range(len(self.group1)) for j in range(len(self.group2))][
-            rank::world_size
-        ]
+        self.block_index = [(i, j) for i in range(len(self.group1)) for j in range(len(self.group2))][rank::world_size]
         self.data_path = Path(data_path)
         self.shared_dict = shared_dict
         self.transform = transform
@@ -102,7 +100,7 @@ class CCIterableDataset(IterableDataset):
         #         self.group2[np.array_split(np.arange(len(self.group2)), num_workers)[worker_id]],
         #     )
         # )
-        #return iter(self.sample(self.block_index))
+        # return iter(self.sample(self.block_index))
         return iter(self.sample(self.block_index[worker_id::num_workers]))
 
     def _read_pair(self, file_pair_list):
@@ -111,12 +109,12 @@ class CCIterableDataset(IterableDataset):
         ncol = len(df_pair.columns)
         if ncol == 1:
             # if the text file contains only one column, generate all possible pairs
-            df_pair.rename(columns={0:"event1"}, inplace=True)
+            df_pair.rename(columns={0: "event1"}, inplace=True)
             data_list1 = sorted(list(set(df_pair["event1"].tolist())))
             data_list2 = data_list1
             pairs = self._generate_pair_set(data_list1, data_list2)
         elif ncol == 2:
-            df_pair.rename(columns={0:"event1", 1:"event2"}, inplace=True)
+            df_pair.rename(columns={0: "event1", 1: "event2"}, inplace=True)
             data_list1 = sorted(list(set(df_pair["event1"].tolist())))
             data_list2 = sorted(list(set(df_pair["event2"].tolist())))
             if self.generate_pair:
@@ -139,19 +137,23 @@ class CCIterableDataset(IterableDataset):
         event_inner = sorted(list(event_inner))
         pairs = {*()}
         if len(event_inner) > 0:
-            pairs.update(set([(evt1, evt2) for i1, evt1 in enumerate(event_inner) for evt2 in event_inner[i1+xcor_offset:]]))
+            pairs.update(
+                set([(evt1, evt2) for i1, evt1 in enumerate(event_inner) for evt2 in event_inner[i1 + xcor_offset :]])
+            )
             if len(event_outer1) > 0:
                 pairs.update(set([(evt1, evt2) for evt1 in event_outer1 for evt2 in event_inner]))
             if len(event_outer2) > 0:
                 pairs.update(set([(evt1, evt2) for evt1 in event_inner for evt2 in event_outer2]))
         if len(event_outer1) > 0 and len(event_outer2) > 0:
-                pairs.update(set([(evt1, evt2) for evt1 in event_outer1 for evt2 in event_outer2]))
+            pairs.update(set([(evt1, evt2) for evt1 in event_outer1 for evt2 in event_outer2]))
         return pairs
 
     def _read_das(self, event, local_dict):
 
         if event not in local_dict:
-            data_list, info_list = read_das_eventphase_data_h5(self.data_path / f"{event}.h5", phase="P", event=True, dataset_keys=["shift_index"])
+            data_list, info_list = read_das_eventphase_data_h5(
+                self.data_path / f"{event}.h5", phase="P", event=True, dataset_keys=["shift_index"]
+            )
             data = torch.tensor(data_list[0], device=self.device)
             info = info_list[0]
             if self.transform is not None:
@@ -176,16 +178,25 @@ class CCIterableDataset(IterableDataset):
                     # print(f"{i=}, {j=}, {ii=}, {jj=} {event1[ii]=}, {event2[jj]=}")
                     data_tuple1 = self._read_das(event1[ii], local_dict)
                     data_tuple2 = self._read_das(event2[jj], local_dict)
-                    yield {"event": event1[ii], "data": data_tuple1[0], "event_time": data_tuple1[1]["event"]["event_time"], "shift_index": data_tuple1[1]["shift_index"]}, \
-                        {"event": event2[jj], "data": data_tuple2[0], "event_time": data_tuple2[1]["event"]["event_time"], "shift_index": data_tuple2[1]["shift_index"]}
-            
+                    yield {
+                        "event": event1[ii],
+                        "data": data_tuple1[0],
+                        "event_time": data_tuple1[1]["event"]["event_time"],
+                        "shift_index": data_tuple1[1]["shift_index"],
+                    }, {
+                        "event": event2[jj],
+                        "data": data_tuple2[0],
+                        "event_time": data_tuple2[1]["event"]["event_time"],
+                        "shift_index": data_tuple2[1]["shift_index"],
+                    }
+
             del local_dict
             if self.device == "cuda":
                 torch.cuda.empty_cache()
 
     def __len__(self):
-        #short_list = min(len(self.data_list1), len(self.data_list2))
-        #return len(self.data_list1) * len(self.data_list2) - short_list * (short_list + 1) // 2
+        # short_list = min(len(self.data_list1), len(self.data_list2))
+        # return len(self.data_list1) * len(self.data_list2) - short_list * (short_list + 1) // 2
         return len(self.pairs)
 
 
@@ -206,22 +217,22 @@ def read_das_eventphase_data_h5(fn, phase=None, event=False, dataset_keys=None, 
         phase = [phase]
     data_list = []
     info_list = []
-    with h5py.File(fn, 'r') as fid:
-        g_phases = fid['data']
+    with h5py.File(fn, "r") as fid:
+        g_phases = fid["data"]
         phase_avail = g_phases.keys()
         if phase is None:
             phase = list(phase_avail)
         for phase_name in phase:
             if not phase_name in g_phases.keys():
-                raise(f"{fn} does not have phase: {phase_name}")
+                raise (f"{fn} does not have phase: {phase_name}")
             g_phase = g_phases[phase_name]
             if attrs_only:
                 data = []
             else:
-                data = g_phase['data'][:]
+                data = g_phase["data"][:]
             info = {}
-            for key in g_phase['data'].attrs.keys():
-                info[key] = g_phases[phase_name]['data'].attrs[key]
+            for key in g_phase["data"].attrs.keys():
+                info[key] = g_phases[phase_name]["data"].attrs[key]
             if dataset_keys is not None:
                 for key in dataset_keys:
                     if key in g_phase.keys():
@@ -231,6 +242,6 @@ def read_das_eventphase_data_h5(fn, phase=None, event=False, dataset_keys=None, 
             data_list.append(data)
             info_list.append(info)
         if event:
-            event_dict = dict((key, fid['data'].attrs[key]) for key in fid['data'].attrs.keys())
-            info_list[0]['event'] = event_dict
+            event_dict = dict((key, fid["data"].attrs[key]) for key in fid["data"].attrs.keys())
+            info_list[0]["event"] = event_dict
     return data_list, info_list

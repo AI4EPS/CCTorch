@@ -1,15 +1,30 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from .transforms import (
     interp_time_cubic_spline,
-    pick_Rkt_mccc,
     pick_mccc_refine,
-    pick_Rkt_maxabs
+    pick_Rkt_maxabs,
+    pick_Rkt_mccc,
 )
 
+
 class CCModel(nn.Module):
-    def __init__(self, dt, maxlag, nma=20, device="cuda", channel_shift=0, mccc=False, reduce_t=True, reduce_x=False, domain="time", to_device=True, batching=True):
+    def __init__(
+        self,
+        dt,
+        maxlag,
+        nma=20,
+        device="cuda",
+        channel_shift=0,
+        mccc=False,
+        reduce_t=True,
+        reduce_x=False,
+        domain="time",
+        to_device=True,
+        batching=True,
+    ):
         super(CCModel, self).__init__()
         self.device = device
         self.to_device = to_device
@@ -42,7 +57,7 @@ class CCModel(nn.Module):
             data2 = torch.view_as_complex(data2)
             event1 = x1["event"]
             event2 = x2["event"]
-        
+
         if self.domain == "time":
             ## using conv1d
             nb1, nc1, nt1 = data1.shape
@@ -51,9 +66,11 @@ class CCModel(nn.Module):
             data2 = data2.view(nb2 * nc2, 1, nt2)
             assert nt2 <= nt1
             if self.channel_shift > 0:
-                xcor = F.conv1d(data1, torch.roll(data2, self.channel_shift, dims=-1), padding=self.nlag+1, groups=nb1 * nc1)
+                xcor = F.conv1d(
+                    data1, torch.roll(data2, self.channel_shift, dims=-1), padding=self.nlag + 1, groups=nb1 * nc1
+                )
             else:
-                xcor = F.conv1d(data1, data2, padding=self.nlag+1, groups=nb1 * nc1)
+                xcor = F.conv1d(data1, data2, padding=self.nlag + 1, groups=nb1 * nc1)
             xcor = xcor.view(nb1, nc1, -1)
         elif self.domain == "frequency":
             # xcorr with fft in frequency domain
@@ -64,7 +81,7 @@ class CCModel(nn.Module):
                 xcor_freq = torch.conj(data1) * data2
             xcor_time = torch.fft.irfft(xcor_freq, n=nfast, dim=-1)
             xcor = torch.roll(xcor_time, nfast // 2, dims=-1)[..., nfast // 2 - self.nlag + 1 : nfast // 2 + self.nlag]
-        
+
         # cross-correlation matrix for one event pair
         result = {"id1": event1, "id2": event2, "xcor": xcor, "dt": self.dt, "channel_shift": self.channel_shift}
         # picking traveltime difference
@@ -73,8 +90,12 @@ class CCModel(nn.Module):
             if self.mccc:
                 scale_factor = 1
                 # xcor_interp = interp_time_cubic_spline(xcor[0, :, :], scale_factor=scale_factor)
-                pick_dt, G0, d0 = pick_Rkt_mccc(xcor[0, :, :], self.dt/scale_factor, scale_factor=1, verbose=False, cuda=True)
-                vmax, vmin, cc_dt = pick_mccc_refine(xcor[0, :, :], self.dt/scale_factor, pick_dt, G0=G0, d0=d0,  verbose=False)
+                pick_dt, G0, d0 = pick_Rkt_mccc(
+                    xcor[0, :, :], self.dt / scale_factor, scale_factor=1, verbose=False, cuda=True
+                )
+                vmax, vmin, cc_dt = pick_mccc_refine(
+                    xcor[0, :, :], self.dt / scale_factor, pick_dt, G0=G0, d0=d0, verbose=False
+                )
                 result["cc_mean"] = torch.mean(torch.abs(vmax))
                 if not self.reduce_x:
                     result["cc_main"] = vmax
@@ -82,7 +103,7 @@ class CCModel(nn.Module):
                     result["cc_dt"] = cc_dt
                     result["cc_mean"] = torch.mean(torch.abs(vmax))
             # Simple pick
-            else: 
+            else:
                 xcor[:] = self.moving_average(xcor, nma=self.nma)
                 if self.reduce_x:
                     vmax = torch.mean(torch.max(torch.abs(xcor), dim=-1).values, dim=-1, keepdim=True)

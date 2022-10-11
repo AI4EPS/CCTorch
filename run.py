@@ -15,13 +15,13 @@ from cctorch import (
     CCModel,
     data,
     fft_real_normalize,
-    normalize,
     interp_time_cubic_spline,
+    normalize,
+    reduce_ccmat,
     taper_time,
     write_xcor_data_to_h5,
     write_xcor_mccc_pick_to_csv,
     write_xcor_to_ccmat,
-    reduce_ccmat
 )
 
 
@@ -30,7 +30,10 @@ def get_args_parser(add_help=True):
 
     parser = argparse.ArgumentParser(description="Cross-Correlation using Pytorch", add_help=add_help)
     parser.add_argument(
-        "--pair-list", default="/home/jxli/packages/CCTorch/tests/pair_mammoth_ccfm_test.txt", type=str, help="pair list"
+        "--pair-list",
+        default="/home/jxli/packages/CCTorch/tests/pair_mammoth_ccfm_test.txt",
+        type=str,
+        help="pair list",
     )
     parser.add_argument(
         "--path-data", default="/kuafu/jxli/Data/DASEventData/mammoth_south/temp", type=str, help="data path"
@@ -38,21 +41,39 @@ def get_args_parser(add_help=True):
 
     parser.add_argument("--block_num1", default=3, type=int, help="Number of blocks for the 1st data pair dimension")
     parser.add_argument("--block_num2", default=3, type=int, help="Number of blocks for the 2nd data pair dimension")
-    parser.add_argument("--generate-pair", action="store_true", help="generate full pair list from data_list1 and data_list2 if turning on this option")
+    parser.add_argument(
+        "--generate-pair",
+        action="store_true",
+        help="generate full pair list from data_list1 and data_list2 if turning on this option",
+    )
     parser.add_argument("--auto-xcor", action="store_true", help="do auto-correlation for data list")
 
     # xcor parameters
     parser.add_argument("--domain", default="time", type=str, help="time domain or frequency domain")
     parser.add_argument("--maxlag", default=0.5, type=float, help="maximum time lag during cross-correlation")
-    parser.add_argument("--channel-shift", default=0, type=int, help="channel shift of 2nd window for cross-correlation")
-    parser.add_argument("--reduce-t", action='store_true', help="reduce the time axis of xcor data")
-    parser.add_argument("--reduce-x", action='store_true', help="reduce the channel axis of xcor data: only have effect when reduce_t is true")
-    parser.add_argument("--mccc", action='store_true', help="use mccc to reduce time axis: only have effect when reduce_t is true")
+    parser.add_argument(
+        "--channel-shift", default=0, type=int, help="channel shift of 2nd window for cross-correlation"
+    )
+    parser.add_argument("--reduce-t", action="store_true", help="reduce the time axis of xcor data")
+    parser.add_argument(
+        "--reduce-x",
+        action="store_true",
+        help="reduce the channel axis of xcor data: only have effect when reduce_t is true",
+    )
+    parser.add_argument(
+        "--mccc", action="store_true", help="use mccc to reduce time axis: only have effect when reduce_t is true"
+    )
     parser.add_argument("--phase-type1", default="P", type=str, help="Phase type of the 1st data window")
     parser.add_argument("--phase-type2", default="P", type=str, help="Phase type of the 2nd data window")
-    parser.add_argument("--path-xcor-data", default="", type=str, help="path to save xcor data output: path_{channel_shift}")
-    parser.add_argument("--path-xcor-pick", default="", type=str, help="path to save xcor pick output: path_{channel_shift}")
-    parser.add_argument("--path-xcor-matrix", default="", type=str, help="path to save xcor matrix output: path_{channel_shift}")
+    parser.add_argument(
+        "--path-xcor-data", default="", type=str, help="path to save xcor data output: path_{channel_shift}"
+    )
+    parser.add_argument(
+        "--path-xcor-pick", default="", type=str, help="path to save xcor pick output: path_{channel_shift}"
+    )
+    parser.add_argument(
+        "--path-xcor-matrix", default="", type=str, help="path to save xcor matrix output: path_{channel_shift}"
+    )
 
     parser.add_argument("--path-dasinfo", default="", type=str, help="csv file with das channel info")
 
@@ -77,10 +98,10 @@ def get_args_parser(add_help=True):
 def main(args):
 
     if args.path_xcor_data:
-        path_xcor_data = f'{args.path_xcor_data}_{args.channel_shift}'
+        path_xcor_data = f"{args.path_xcor_data}_{args.channel_shift}"
         utils.mkdir(path_xcor_data)
     if args.path_xcor_pick:
-        path_xcor_pick = f'{args.path_xcor_pick}_{args.channel_shift}'
+        path_xcor_pick = f"{args.path_xcor_pick}_{args.channel_shift}"
         utils.mkdir(path_xcor_pick)
 
     utils.init_distributed_mode(args)
@@ -89,15 +110,11 @@ def main(args):
     device = torch.device(args.device)
     manager = Manager()
     shared_dict = manager.dict()
-    
+
     if args.domain == "time":
-        transform = T.Compose([T.Lambda(taper_time),
-                            T.Lambda(interp_time_cubic_spline), 
-                            T.Lambda(normalize)])
+        transform = T.Compose([T.Lambda(taper_time), T.Lambda(interp_time_cubic_spline), T.Lambda(normalize)])
     elif args.domain == "frequency":
-        transform = T.Compose([T.Lambda(taper_time),
-                            T.Lambda(interp_time_cubic_spline), 
-                            T.Lambda(fft_real_normalize)])
+        transform = T.Compose([T.Lambda(taper_time), T.Lambda(interp_time_cubic_spline), T.Lambda(fft_real_normalize)])
     # transform = get_transform()
 
     pair_list = args.pair_list
@@ -143,14 +160,18 @@ def main(args):
     )
 
     ## TODO: check if DataParallel is better for dataset memory
-    ccmodel = CCModel(device=args.device, to_device=False, batching=None, 
-                        dt=0.001, 
-                        maxlag=args.maxlag, 
-                        reduce_t=args.reduce_t, 
-                        reduce_x=args.reduce_x,
-                        channel_shift=args.channel_shift, 
-                        mccc=args.mccc, 
-                        domain=args.domain)
+    ccmodel = CCModel(
+        device=args.device,
+        to_device=False,
+        batching=None,
+        dt=0.001,
+        maxlag=args.maxlag,
+        reduce_t=args.reduce_t,
+        reduce_x=args.reduce_x,
+        channel_shift=args.channel_shift,
+        mccc=args.mccc,
+        domain=args.domain,
+    )
     ccmodel.to(device)
     # if args.distributed:
     #     # ccmodel = torch.nn.parallel.DistributedDataParallel(ccmodel, device_ids=[args.gpu])
@@ -166,13 +187,13 @@ def main(args):
         id_col = torch.tensor(dataset.data_list2, device=args.device)
 
     if args.path_dasinfo:
-        channel_index = pd.read_csv(args.path_dasinfo)['index']
+        channel_index = pd.read_csv(args.path_dasinfo)["index"]
     else:
         channel_index = None
 
     for x in metric_logger.log_every(dataloader, 100, "CC: "):
-        #print(x[0]["data"].shape)
-        #print(x[1]["data"].shape)
+        # print(x[0]["data"].shape)
+        # print(x[1]["data"].shape)
         result = ccmodel(x)
         # write xcor to file
         if args.path_xcor_data:
@@ -186,9 +207,16 @@ def main(args):
 
     if args.path_xcor_matrix:
         import numpy as np
+
         cc_matrix = cc_matrix.cpu().numpy()
-        np.savez(f'{args.path_xcor_matrix}_{args.channel_shift}_{rank}.npz', cc=cc_matrix, id_row=dataset.data_list1, id_col=dataset.data_list2, id_pair=list(dataset.pairs))
-        
+        np.savez(
+            f"{args.path_xcor_matrix}_{args.channel_shift}_{rank}.npz",
+            cc=cc_matrix,
+            id_row=dataset.data_list1,
+            id_col=dataset.data_list2,
+            id_pair=list(dataset.pairs),
+        )
+
         torch.distributed.barrier()
         if rank == 0:
             reduce_ccmat(args.path_xcor_matrix, args.channel_shift, world_size)
