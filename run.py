@@ -20,7 +20,8 @@ from cctorch import (
     taper_time,
     write_xcor_data_to_h5,
     write_xcor_mccc_pick_to_csv,
-    write_xcor_to_ccmat
+    write_xcor_to_ccmat,
+    reduce_ccmat
 )
 
 
@@ -186,7 +187,11 @@ def main(args):
     if args.path_xcor_matrix:
         import numpy as np
         cc_matrix = cc_matrix.cpu().numpy()
-        np.savez(f'{args.path_xcor_matrix}_{args.channel_shift}_{rank}.npz', cc=cc_matrix, id_row=dataset.data_list1, id_col=dataset.data_list2)
+        np.savez(f'{args.path_xcor_matrix}_{args.channel_shift}_{rank}.npz', cc=cc_matrix, id_row=dataset.data_list1, id_col=dataset.data_list2, id_pair=list(dataset.pairs))
+        
+        torch.distributed.barrier()
+        if rank == 0:
+            reduce_ccmat(args.path_xcor_matrix, args.channel_shift, world_size)
 
 
 if __name__ == "__main__":
