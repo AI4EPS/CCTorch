@@ -7,8 +7,7 @@
 
 nodes=( $(scontrol show hostnames $SLURM_JOB_NODELIST) )
 nnodes=${#nodes[@]}
-nodes_array=($nodes)
-head_node=${nodes_array[0]}
+head_node=${nodes[0]}
 head_node_ip=$(srun --nodes=1 --ntasks=1 -w "$head_node" hostname --ip-address)
 
 echo Using $nnodes nodes: $SLURM_JOB_NODELIST
