@@ -19,3 +19,8 @@ torchrun --standalone --nproc_per_node=4 \
         --path-xcor-matrix=/net/jin/ssd-tmp-nobak2/jxli/DASEventData/mammoth_south/temp_xcor_ccfm/xcor_matrix \
         --path-dasinfo=/kuafu/EventData/Mammoth_south/das_info.csv
 ```
+
+## Multi Nodes using Slurm (e.g., using 2 nodes)
+```
+sbatch --nodes=2 --ntasks=2 sbatch_run.sh 
+```
