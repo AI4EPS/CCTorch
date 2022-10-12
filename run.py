@@ -51,6 +51,9 @@ def get_args_parser(add_help=True):
     # xcor parameters
     parser.add_argument("--domain", default="time", type=str, help="time domain or frequency domain")
     parser.add_argument("--maxlag", default=0.5, type=float, help="maximum time lag during cross-correlation")
+    parser.add_argument("--taper", action="store_true", help="taper two data window")
+    parser.add_argument("--interp", action="store_true", help="interpolate the data window along time axs")
+    parser.add_argument("--scale-factor", default=10, type=int, help="interpolation scale up factor")
     parser.add_argument(
         "--channel-shift", default=0, type=int, help="channel shift of 2nd window for cross-correlation"
     )
@@ -111,10 +114,16 @@ def main(args):
     manager = Manager()
     shared_dict = manager.dict()
 
+    transform_list = []
+    if args.taper:
+        transform_list.append(T.Lambda(taper_time))
+    if args.interp:
+        transform_list.append(T.Lambda(interp_time_cubic_spline))
     if args.domain == "time":
-        transform = T.Compose([T.Lambda(taper_time), T.Lambda(interp_time_cubic_spline), T.Lambda(normalize)])
+        transform_list.append(T.Lambda(normalize))
     elif args.domain == "frequency":
-        transform = T.Compose([T.Lambda(taper_time), T.Lambda(interp_time_cubic_spline), T.Lambda(fft_real_normalize)])
+        transform_list.append(T.Lambda(fft_real_normalize))
+    transform = T.Compose(transform_list)
     # transform = get_transform()
 
     pair_list = args.pair_list
