@@ -1,3 +1,4 @@
+import multiprocessing as mp
 from multiprocessing import Manager
 from pathlib import Path
 
@@ -200,19 +201,35 @@ def main(args):
     else:
         channel_index = None
 
+    writing_processes = []
+    ctx = mp.get_context('spawn')
     for x in metric_logger.log_every(dataloader, 100, "CC: "):
         # print(x[0]["data"].shape)
         # print(x[1]["data"].shape)
         result = ccmodel(x)
         # write xcor to file
         if args.path_xcor_data:
-            write_xcor_data_to_h5(result, path_xcor_data, phase1=args.phase_type1, phase2=args.phase_type1)
+            # write_xcor_data_to_h5(result, path_xcor_data, phase1=args.phase_type1, phase2=args.phase_type1)
+            p = ctx.Process(target=write_xcor_data_to_h5, args=(result, path_xcor_data,), kwargs={"phase1":args.phase_type1, "phase2":args.phase_type1})
+            p.start()
+            writing_processes.append(p)
         if args.path_xcor_pick and args.mccc:
-            write_xcor_mccc_pick_to_csv(result, x, path_xcor_pick, channel_index=channel_index)
+            # write_xcor_mccc_pick_to_csv(result, x, path_xcor_pick, channel_index=channel_index)
+            p = ctx.Process(target=write_xcor_mccc_pick_to_csv, args=(result, x, path_xcor_pick, channel_index))
+            p.start()
+            writing_processes.append(p)
         if args.path_xcor_matrix:
-            write_xcor_to_ccmat(result, cc_matrix, id_row, id_col)
+            # write_xcor_to_ccmat(result, cc_matrix, id_row, id_col)
+            p = ctx.Process(target=write_xcor_mccc_pick_to_csv, args=(result, x, path_xcor_pick, channel_index))
+            p.start()
+            writing_processes.append(p)
         ## TODO: ADD post-processing
         ## TODO: Add visualization
+    
+    print("Waiting for writing processes to finish...")
+    for p in writing_processes:
+        p.join()
+        print("Finish writing outputs.")
 
     if args.path_xcor_matrix:
         import numpy as np
