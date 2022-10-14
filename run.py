@@ -1,6 +1,7 @@
 import multiprocessing as mp
 from multiprocessing import Manager
 from pathlib import Path
+import logging
 
 import h5py
 import pandas as pd
@@ -108,6 +109,7 @@ def main(args):
         path_xcor_pick = f"{args.path_xcor_pick}_{args.channel_shift}"
         utils.mkdir(path_xcor_pick)
 
+    logging.basicConfig(filename='cctorch.log', level=logging.INFO)
     utils.init_distributed_mode(args)
     print(args)
 
@@ -203,6 +205,7 @@ def main(args):
 
     writing_processes = []
     ctx = mp.get_context('spawn')
+    ncpu = mp.cpu_count()
     for x in metric_logger.log_every(dataloader, 100, "CC: "):
         # print(x[0]["data"].shape)
         # print(x[1]["data"].shape)
@@ -223,13 +226,20 @@ def main(args):
             p = ctx.Process(target=write_xcor_mccc_pick_to_csv, args=(result, x, path_xcor_pick, channel_index))
             p.start()
             writing_processes.append(p)
+        
+        ## prevent too many processes
+        if len(writing_processes) > ncpu:
+            for p in writing_processes:
+                p.join()
+            writing_processes = []
+
         ## TODO: ADD post-processing
         ## TODO: Add visualization
     
-    print("Waiting for writing processes to finish...")
+    logging.info("Waiting for writing processes to finish...")
     for p in writing_processes:
         p.join()
-        print("Finish writing outputs.")
+        logging.info("Finish writing outputs.")
 
     if args.path_xcor_matrix:
         import numpy as np
