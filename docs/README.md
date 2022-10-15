@@ -5,12 +5,12 @@
 ## Single GPU
 python run.py
 
-## Multi GPU (e.g., using 8 GPUs)
+## Multi GPUs (e.g., using 8 GPUs)
 ```
 torchrun --standalone --nproc_per_node=8 run.py
 ```
 
-## Example for mammoth south
+- Example for mammoth south
 ```
 torchrun --standalone --nproc_per_node=4 \
         run.py --generate-pair --auto-xcor --reduce-t --mccc --channel-shift=0 \
