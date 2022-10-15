@@ -1,5 +1,7 @@
 # CCTorch: Cross-Correlation using Pytorch
 
+![](assets/diagram.png)
+
 ## Single GPU
 python run.py
 
