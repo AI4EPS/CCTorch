@@ -157,7 +157,7 @@ def main(args):
     dataloader = DataLoader(
         dataset,
         batch_size=None,
-        num_workers=args.workers,
+        num_workers=args.workers if args.dataset_type == "map" else 0,
         sampler=sampler if args.dataset_type == "map" else None,
         pin_memory=False,
     )
