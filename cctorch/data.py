@@ -25,6 +25,7 @@ class CCDataset(Dataset):
         **kwargs,
     ):
         super(CCDataset).__init__()
+        ## TODO: extract this part into a function; keep this temporary until TM and AN are implemented
         ## pair_list has the highest priority
         if pair_list is not None:
             self.pair_list, self.data_list1, self.data_list2 = read_pair_list(pair_list)
@@ -113,6 +114,7 @@ class CCIterableDataset(IterableDataset):
         **kwargs,
     ):
         super(CCIterableDataset).__init__()
+        ## TODO: extract this part into a function; keep this temporary until TM and AN are implemented
         ## pair_list has the highest priority
         if pair_list is not None:
             self.pair_list, self.data_list1, self.data_list2 = read_pair_list(pair_list)

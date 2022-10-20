@@ -38,7 +38,6 @@ class CCModel(nn.Module):
         self.domain = domain
         self.mccc = mccc
         self.postprocessing = postprocess
-
         self.use_pair_index = use_pair_index
         self.batch_size = batch_size
         self.to_device = to_device
@@ -56,6 +55,7 @@ class CCModel(nn.Module):
                     - info (dict): information information of data2
         """
 
+        ##########################################################################################
         ## This part is for dataset_type == map, but this is not used in the current version
         # Args:
         #     x (dict):
@@ -63,77 +63,77 @@ class CCModel(nn.Module):
         #         - pair_index (torch.Tensor): pair index
         #         - info (dict): attributes information
 
-        if self.use_pair_index:
-            # data = x["data"].to(self.device)
-            # cc_index = x["pair_index"].to(self.device)
-            if self.to_device:
-                data = x["data"].to(self.device)
-                cc_index = x["pair_index"].to(self.device)
-            else:
-                data = x["data"]
-                cc_index = x["pair_index"]
-            num_pairs = cc_index.shape[0]
-            pbar = tqdm(range(0, num_pairs, self.batch_size))
+        # if self.use_pair_index:
+        #     # data = x["data"].to(self.device)
+        #     # cc_index = x["pair_index"].to(self.device)
+        #     if self.to_device:
+        #         data = x["data"].to(self.device)
+        #         cc_index = x["pair_index"].to(self.device)
+        #     else:
+        #         data = x["data"]
+        #         cc_index = x["pair_index"]
+        #     num_pairs = cc_index.shape[0]
+        #     pbar = tqdm(range(0, num_pairs, self.batch_size))
+        # else:
+        #     pbar = [0]
+
+        # result = []
+        # for i in pbar:
+
+        #     if self.use_pair_index:
+        #         c1 = cc_index[i : i + self.batch_size, 0]
+        #         c2 = cc_index[i : i + self.batch_size, 1]
+        #         if len(c1) == 1:  ## returns a view of the original tensor
+        #             data1 = torch.select(data, 0, c1[0]).unsqueeze(0)
+        #         else:
+        #             data1 = torch.index_select(data, 0, c1)
+        #         if len(c2) == 1:
+        #             data2 = torch.select(data, 0, c1[0]).unsqueeze(0)
+        #         else:
+        #             data2 = torch.index_select(data, 0, c2)
+        #     else:
+        ##########################################################################################
+
+        x0, x1 = x
+        if self.to_device:
+            data1 = x0["data"].to(self.device)
+            data2 = x1["data"].to(self.device)
         else:
-            pbar = [0]
+            data1 = x0["data"]
+            data2 = x1["data"]
 
-        result = []
-        for i in pbar:
-
-            if self.use_pair_index:
-                c1 = cc_index[i : i + self.batch_size, 0]
-                c2 = cc_index[i : i + self.batch_size, 1]
-                if len(c1) == 1:  ## returns a view of the original tensor
-                    data1 = torch.select(data, 0, c1[0]).unsqueeze(0)
-                else:
-                    data1 = torch.index_select(data, 0, c1)
-                if len(c2) == 1:
-                    data2 = torch.select(data, 0, c1[0]).unsqueeze(0)
-                else:
-                    data2 = torch.index_select(data, 0, c2)
+        if self.domain == "time":
+            ## using conv1d
+            nb1, nc1, nt1 = data1.shape
+            data1 = data1.view(1, nb1 * nc1, nt1)
+            nb2, nc2, nt2 = data2.shape
+            data2 = data2.view(nb2 * nc2, 1, nt2)
+            if self.channel_shift != 0:
+                xcor = F.conv1d(
+                    data1,
+                    torch.roll(data2, self.channel_shift, dims=-2),
+                    padding=self.nlag + 1,
+                    groups=nb1 * nc1,
+                )
             else:
-                x0, x1 = x
-                if self.to_device:
-                    data1 = x0["data"].to(self.device)
-                    data2 = x1["data"].to(self.device)
-                else:
-                    data1 = x0["data"]
-                    data2 = x1["data"]
+                xcor = F.conv1d(data1, data2, padding=self.nlag + 1, groups=nb1 * nc1)
+            xcor = xcor.view(nb1, nc1, -1)
 
-            if self.domain == "time":
-                ## using conv1d
-                nb1, nc1, nt1 = data1.shape
-                data1 = data1.view(1, nb1 * nc1, nt1)
-                nb2, nc2, nt2 = data2.shape
-                data2 = data2.view(nb2 * nc2, 1, nt2)
-                if self.channel_shift != 0:
-                    xcor = F.conv1d(
-                        data1,
-                        torch.roll(data2, self.channel_shift, dims=-2),
-                        padding=self.nlag + 1,
-                        groups=nb1 * nc1,
-                    )
-                else:
-                    xcor = F.conv1d(data1, data2, padding=self.nlag + 1, groups=nb1 * nc1)
-                xcor = xcor.view(nb1, nc1, -1)
+        elif self.domain == "frequency":
+            # xcorr with fft in frequency domain
+            nfast = (data1.shape[-1] - 1) * 2
+            if self.channel_shift != 0:
+                xcor_freq = data1 * torch.roll(torch.conj(data2), self.channel_shift, dims=-2)
+            else:
+                xcor_freq = data1 * torch.conj(data2)
+            xcor_time = torch.fft.irfft(xcor_freq, n=nfast, dim=-1)
+            xcor = torch.roll(xcor_time, nfast // 2, dims=-1)[..., nfast // 2 - self.nlag + 1 : nfast // 2 + self.nlag]
 
-            elif self.domain == "frequency":
-                # xcorr with fft in frequency domain
-                nfast = (data1.shape[-1] - 1) * 2
-                if self.channel_shift != 0:
-                    xcor_freq = data1 * torch.roll(torch.conj(data2), self.channel_shift, dims=-2)
-                else:
-                    xcor_freq = data1 * torch.conj(data2)
-                xcor_time = torch.fft.irfft(xcor_freq, n=nfast, dim=-1)
-                xcor = torch.roll(xcor_time, nfast // 2, dims=-1)[
-                    ..., nfast // 2 - self.nlag + 1 : nfast // 2 + self.nlag
-                ]
+        if self.postprocessing is not None:
+            xcor = self.postprocessing(xcor)
 
-            if self.postprocessing is not None:
-                xcor = self.postprocessing(xcor)
-
-            ## TODO: add to results
-            result = {}
+        ## TODO: add to results
+        result = {}
 
         return result
 
