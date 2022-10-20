@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from tqdm import tqdm
 
 from .transforms import (
     interp_time_cubic_spline,
@@ -22,8 +23,7 @@ class CCModel(nn.Module):
         reduce_x=False,
         domain="time",
         use_pair_index=False,
-        block_size=16,
-        batching=True,
+        batch_size=16,
         device="cuda",
     ):
         super(CCModel, self).__init__()
@@ -37,8 +37,7 @@ class CCModel(nn.Module):
         self.mccc = mccc
 
         self.use_pair_index = use_pair_index
-        self.block_size = block_size
-        self.batching = batching
+        self.batch_size = batch_size
         self.device = device
 
     def forward(self, x):
@@ -47,14 +46,15 @@ class CCModel(nn.Module):
             data = x["data"].to(self.device)
             cc_index = x["pair_index"].to(self.device)
             num_pairs = cc_index.shape[0]
+            pbar = tqdm(range(0, num_pairs, self.batch_size))
         else:
-            num_pairs = 1
+            pbar = [0]
 
-        for i in range(0, num_pairs, self.block_size):
+        for i in pbar:
 
             if self.use_pair_index:
-                c1 = cc_index[i : i + self.block_size, 0]
-                c2 = cc_index[i : i + self.block_size, 1]
+                c1 = cc_index[i : i + self.batch_size, 0]
+                c2 = cc_index[i : i + self.batch_size, 1]
                 data1 = torch.index_select(data, 0, c1)
                 data2 = torch.index_select(data, 0, c2)
             else:
@@ -75,6 +75,7 @@ class CCModel(nn.Module):
                 else:
                     xcor = F.conv1d(data1, data2, padding=self.nlag + 1, groups=nb1 * nc1)
                 xcor = xcor.view(nb1, nc1, -1)
+
             elif self.domain == "frequency":
                 # xcorr with fft in frequency domain
                 nfast = (data1.shape[-1] - 1) * 2
@@ -87,6 +88,7 @@ class CCModel(nn.Module):
                     ..., nfast // 2 - self.nlag + 1 : nfast // 2 + self.nlag
                 ]
 
+        ## TODO: clean up post-processing
         # cross-correlation matrix for one event pair
         # result = {"id1": event1, "id2": event2, "xcor": xcor, "dt": self.dt, "channel_shift": self.channel_shift}
         # picking traveltime difference

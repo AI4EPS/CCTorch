@@ -36,8 +36,8 @@ def get_args_parser(add_help=True):
     parser.add_argument("--data-list2", default=None, type=str, help="data list 1")
     parser.add_argument("--data-path", default="./", type=str, help="data path")
     parser.add_argument("--dataset-type", default="map", type=str, help="data loader type in {map, iterable}")
-    parser.add_argument("--block_num1", default=1, type=int, help="Number of blocks for the 1st data pair dimension")
-    parser.add_argument("--block_num2", default=1, type=int, help="Number of blocks for the 2nd data pair dimension")
+    parser.add_argument("--block-num1", default=1, type=int, help="Number of blocks for the 1st data pair dimension")
+    parser.add_argument("--block-num2", default=1, type=int, help="Number of blocks for the 2nd data pair dimension")
     parser.add_argument("--auto-xcorr", action="store_true", help="do auto-correlation for data list")
 
     # xcor parameters
@@ -78,7 +78,7 @@ def get_args_parser(add_help=True):
         type=str,
         help="mode for tasks of CC (cross-correlation), TM (template matching), and AM (ambient noise)",
     )
-    parser.add_argument("--batch-size", default=1, type=int, help="batch size")
+    parser.add_argument("--batch-size", default=64, type=int, help="batch size")
     parser.add_argument("--workers", default=0, type=int, help="data loading workers")
     parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu, Default: cuda)")
 
@@ -96,15 +96,13 @@ def main(args):
     rank = utils.get_rank() if args.distributed else 0
     world_size = utils.get_world_size() if args.distributed else 1
     device = torch.device(args.device)
-    print(args)
 
-    if utils.is_main_process():
-        if args.path_xcor_data:
-            path_xcor_data = f"{args.path_xcor_data}_{args.channel_shift}"
-            utils.mkdir(path_xcor_data)
-        if args.path_xcor_pick:
-            path_xcor_pick = f"{args.path_xcor_pick}_{args.channel_shift}"
-            utils.mkdir(path_xcor_pick)
+    if args.path_xcor_data:
+        path_xcor_data = f"{args.path_xcor_data}_{args.channel_shift}"
+        utils.mkdir(path_xcor_data)
+    if args.path_xcor_pick:
+        path_xcor_pick = f"{args.path_xcor_pick}_{args.channel_shift}"
+        utils.mkdir(path_xcor_pick)
 
     transform_list = []
     if args.taper:
@@ -147,7 +145,9 @@ def main(args):
         )
     else:
         raise ValueError(f"dataset_type {args.dataset_type} not supported")
-    print(f"{len(dataset) = }")
+
+    if len(dataset) < world_size:
+        raise ValueError(f"dataset size {len(dataset)} is smaller than world size {world_size}")
 
     if args.distributed:
         sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=False)
@@ -158,7 +158,7 @@ def main(args):
         dataset,
         batch_size=None,
         num_workers=args.workers,
-        sampler=sampler if args.dataset_type == "Dataset" else None,
+        sampler=sampler if args.dataset_type == "map" else None,
         pin_memory=False,
     )
 
@@ -171,91 +171,88 @@ def main(args):
         mccc=args.mccc,
         domain=args.domain,
         use_pair_index=True if args.dataset_type == "map" else False,
+        batch_size=args.batch_size,  ## only useful for dataset_type == map
         device=args.device,
-        batching=False,
     )
     ccmodel.to(args.device)
 
-    ## only used for model with parameters
-    # if args.distributed:
-    #     # ccmodel = torch.nn.parallel.DistributedDataParallel(ccmodel, device_ids=[args.gpu])
-    #     # model_without_ddp = ccmodel.module
-    #     pass
-    # else:
-    #     ccmodel = nn.DataParallel(ccmodel)
-
     metric_logger = utils.MetricLogger(delimiter="  ")
 
-    if args.path_xcor_matrix:
-        cc_matrix = torch.zeros([len(dataset.data_list1), len(dataset.data_list2)], device=args.device)
-        id_row = torch.tensor(dataset.data_list1, device=args.device)
-        id_col = torch.tensor(dataset.data_list2, device=args.device)
-
-    if args.path_dasinfo:
-        channel_index = pd.read_csv(args.path_dasinfo)["index"]
-    else:
-        channel_index = None
-
-    writing_processes = []
-    ctx = mp.get_context("spawn")
-    ncpu = mp.cpu_count()
-    for x in metric_logger.log_every(dataloader, 1, "CC: "):
+    for x in metric_logger.log_every(dataloader, 100, ""):
         result = ccmodel(x)
 
-        if args.path_xcor_data:
-            # write_xcor_data_to_h5(result, path_xcor_data, phase1=args.phase_type1, phase2=args.phase_type1)
-            for k in result:
-                result[k] = result[k].cpu()
-            p = ctx.Process(
-                target=write_xcor_data_to_h5,
-                args=(
-                    result,
-                    path_xcor_data,
-                ),
-                kwargs={"phase1": args.phase_type1, "phase2": args.phase_type1},
-            )
-            p.start()
-            writing_processes.append(p)
-        if args.path_xcor_pick and args.mccc:
-            # write_xcor_mccc_pick_to_csv(result, x, path_xcor_pick, channel_index=channel_index)
-            p = ctx.Process(target=write_xcor_mccc_pick_to_csv, args=(result, x, path_xcor_pick, channel_index))
-            p.start()
-            writing_processes.append(p)
-        if args.path_xcor_matrix:
-            # write_xcor_to_ccmat(result, cc_matrix, id_row, id_col)
-            p = ctx.Process(target=write_xcor_mccc_pick_to_csv, args=(result, x, path_xcor_pick, channel_index))
-            p.start()
-            writing_processes.append(p)
+    ## TODO: cleanup writting
 
-        ## prevent too many processes
-        if len(writing_processes) > ncpu:
-            for p in writing_processes:
-                p.join()
-            writing_processes = []
+    # if args.path_xcor_matrix:
+    #     cc_matrix = torch.zeros([len(dataset.data_list1), len(dataset.data_list2)], device=args.device)
+    #     id_row = torch.tensor(dataset.data_list1, device=args.device)
+    #     id_col = torch.tensor(dataset.data_list2, device=args.device)
 
-        ## TODO: ADD post-processing
-        ## TODO: Add visualization
+    # if args.path_dasinfo:
+    #     channel_index = pd.read_csv(args.path_dasinfo)["index"]
+    # else:
+    #     channel_index = None
 
-    logging.info("Waiting for writing processes to finish...")
-    for p in writing_processes:
-        p.join()
-        logging.info("Finish writing outputs.")
+    # writing_processes = []
+    # ctx = mp.get_context("spawn")
+    # ncpu = mp.cpu_count()
+    # for x in metric_logger.log_every(dataloader, 1, "CC: "):
+    #     result = ccmodel(x)
 
-    if args.path_xcor_matrix:
-        import numpy as np
+    #     if args.path_xcor_data:
+    #         # write_xcor_data_to_h5(result, path_xcor_data, phase1=args.phase_type1, phase2=args.phase_type1)
+    #         for k in result:
+    #             result[k] = result[k].cpu()
+    #         p = ctx.Process(
+    #             target=write_xcor_data_to_h5,
+    #             args=(
+    #                 result,
+    #                 path_xcor_data,
+    #             ),
+    #             kwargs={"phase1": args.phase_type1, "phase2": args.phase_type1},
+    #         )
+    #         p.start()
+    #         writing_processes.append(p)
+    #     if args.path_xcor_pick and args.mccc:
+    #         # write_xcor_mccc_pick_to_csv(result, x, path_xcor_pick, channel_index=channel_index)
+    #         p = ctx.Process(target=write_xcor_mccc_pick_to_csv, args=(result, x, path_xcor_pick, channel_index))
+    #         p.start()
+    #         writing_processes.append(p)
+    #     if args.path_xcor_matrix:
+    #         # write_xcor_to_ccmat(result, cc_matrix, id_row, id_col)
+    #         p = ctx.Process(target=write_xcor_mccc_pick_to_csv, args=(result, x, path_xcor_pick, channel_index))
+    #         p.start()
+    #         writing_processes.append(p)
 
-        cc_matrix = cc_matrix.cpu().numpy()
-        np.savez(
-            f"{args.path_xcor_matrix}_{args.channel_shift}_{rank}.npz",
-            cc=cc_matrix,
-            id_row=dataset.data_list1,
-            id_col=dataset.data_list2,
-            id_pair=list(dataset.pairs),
-        )
+    #     ## prevent too many processes
+    #     if len(writing_processes) > ncpu:
+    #         for p in writing_processes:
+    #             p.join()
+    #         writing_processes = []
 
-        torch.distributed.barrier()
-        if rank == 0:
-            reduce_ccmat(args.path_xcor_matrix, args.channel_shift, world_size)
+    #     ## TODO: ADD post-processing
+    #     ## TODO: Add visualization
+
+    # logging.info("Waiting for writing processes to finish...")
+    # for p in writing_processes:
+    #     p.join()
+    #     logging.info("Finish writing outputs.")
+
+    # if args.path_xcor_matrix:
+    #     import numpy as np
+
+    #     cc_matrix = cc_matrix.cpu().numpy()
+    #     np.savez(
+    #         f"{args.path_xcor_matrix}_{args.channel_shift}_{rank}.npz",
+    #         cc=cc_matrix,
+    #         id_row=dataset.data_list1,
+    #         id_col=dataset.data_list2,
+    #         id_pair=list(dataset.pairs),
+    #     )
+
+    #     torch.distributed.barrier()
+    #     if rank == 0:
+    #         reduce_ccmat(args.path_xcor_matrix, args.channel_shift, world_size)
 
 
 if __name__ == "__main__":

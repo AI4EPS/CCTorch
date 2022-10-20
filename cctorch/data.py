@@ -26,11 +26,11 @@ class CCDataset(Dataset):
     ):
         super(CCDataset).__init__()
         if pair_list is not None:
-            self.pair_list, self.data_list1, self.data_list2 = read_pair(pair_list)
+            self.pair_list, self.data_list1, self.data_list2 = read_pair_list(pair_list)
         elif data_list1 is not None:
-            self.data_list1 = pd.read_csv(data_list1, header=None)
+            self.data_list1 = list(set(pd.read_csv(data_list1, header=None, names=["event"])["event"].tolist()))
             if data_list2 is not None:
-                self.data_list2 = pd.read_csv(data_list2, header=None)
+                self.data_list2 = list(set(pd.read_csv(data_list2, header=None, names=["event"])["event"].tolist()))
             else:
                 self.data_list2 = self.data_list1
             self.pair_list = generate_pairs(self.data_list1, self.data_list2)
@@ -40,15 +40,15 @@ class CCDataset(Dataset):
         self.block_num2 = block_num2
         self.group1 = [list(x) for x in np.array_split(self.data_list1, block_num1) if len(x) > 0]
         self.group2 = [list(x) for x in np.array_split(self.data_list2, block_num2) if len(x) > 0]
-        self.block_index = [(i, j) for i in range(len(self.group1)) for j in range(len(self.group2))][rank::world_size]
+        self.block_index = [(i, j) for i in range(len(self.group1)) for j in range(len(self.group2))]
         self.data_path = Path(data_path)
         self.data_format = data_format
         self.transform = transform
         self.device = device
 
-    def __getitem__(self, i):
+    def __getitem__(self, idx):
 
-        i, j = self.block_index[i]
+        i, j = self.block_index[idx]
         event1, event2 = self.group1[i], self.group2[j]
 
         index_dict = {}
@@ -74,16 +74,20 @@ class CCDataset(Dataset):
 
                 pair_index.append([idx1, idx2])
 
-        data = torch.stack(data, dim=0).to(self.device)
-        pair_index = torch.tensor(pair_index).to(self.device)
+        if len(data) > 0:
+            data = torch.stack(data, dim=0).to(self.device)
+            pair_index = torch.tensor(pair_index).to(self.device)
 
-        if self.transform is not None:
-            data = self.transform(data)
+            if self.transform is not None:
+                data = self.transform(data)
+        else:
+            data = torch.empty((1, 1, 1), dtype=torch.float32).to(self.device)
+            pair_index = torch.tensor([[0, 0]], dtype=torch.int64).to(self.device)
 
         return {"data": data, "info": info, "pair_index": pair_index}
 
     def __len__(self):
-        return len(self.block_index)
+        return self.block_num1 * self.block_num2
 
 
 class CCIterableDataset(IterableDataset):
@@ -105,11 +109,11 @@ class CCIterableDataset(IterableDataset):
     ):
         super(CCIterableDataset).__init__()
         if pair_list is not None:
-            self.pair_list, self.data_list1, self.data_list2 = read_pair(pair_list)
+            self.pair_list, self.data_list1, self.data_list2 = read_pair_list(pair_list)
         elif data_list1 is not None:
-            self.data_list1 = pd.read_csv(data_list1, header=None)
+            self.data_list1 = list(set(pd.read_csv(data_list1, header=None, names=["event"])["event"].tolist()))
             if data_list2 is not None:
-                self.data_list2 = pd.read_csv(data_list2, header=None)
+                self.data_list2 = list(set(pd.read_csv(data_list2, header=None, names=["event"])["event"].tolist()))
             else:
                 self.data_list2 = self.data_list1
             self.pair_list = generate_pairs(self.data_list1, self.data_list2)
@@ -142,6 +146,7 @@ class CCIterableDataset(IterableDataset):
             event1, event2 = self.group1[i], self.group2[j]
             for ii in range(len(event1)):
                 for jj in range(len(event2)):
+
                     if (event1[ii], event2[jj]) not in self.pair_list:
                         continue
 
@@ -222,10 +227,9 @@ def generate_pairs(event1, event2, auto_xcorr=False):
     return pairs
 
 
-def read_pair(file_pair_list):
+def read_pair_list(file_pair_list):
     # read pair ids from a text file
-    pairs_df = pd.read_csv(file_pair_list, header=None)
-    pairs_df.rename(columns={0: "event1", 1: "event2"}, inplace=True)
+    pairs_df = pd.read_csv(file_pair_list, header=None, names=["event1", "event2"])
     pair_list = {(x["event1"], x["event2"]) for _, x in pairs_df.iterrows()}
     data_list1 = sorted(list(set(pairs_df["event1"].tolist())))
     data_list2 = sorted(list(set(pairs_df["event2"].tolist())))
