@@ -22,8 +22,10 @@ class CCModel(nn.Module):
         reduce_t=True,
         reduce_x=False,
         domain="time",
+        postprocess=None,
         use_pair_index=False,
         batch_size=16,
+        to_device=False,
         device="cuda",
     ):
         super(CCModel, self).__init__()
@@ -35,32 +37,68 @@ class CCModel(nn.Module):
         self.reduce_x = reduce_x
         self.domain = domain
         self.mccc = mccc
+        self.postprocessing = postprocess
 
         self.use_pair_index = use_pair_index
         self.batch_size = batch_size
+        self.to_device = to_device
         self.device = device
 
     def forward(self, x):
+        """Perform cross-correlation on input data
+        Args:
+            x (tuple):
+                - x[0] (dict):
+                    - data (torch.Tensor): data1 with shape (batch, nsta/nch, nt)
+                    - info (dict): attributes information of data1
+                - x[1] (dict):
+                    - data (torch.Tensor): data2 with shape (batch, nsta/nch, nt)
+                    - info (dict): information information of data2
+        """
+
+        ## This part is for dataset_type == map, but this is not used in the current version
+        # Args:
+        #     x (dict):
+        #         - data (torch.Tensor): input data with shape (batch, nsta/nch, nt)
+        #         - pair_index (torch.Tensor): pair index
+        #         - info (dict): attributes information
 
         if self.use_pair_index:
-            data = x["data"].to(self.device)
-            cc_index = x["pair_index"].to(self.device)
+            # data = x["data"].to(self.device)
+            # cc_index = x["pair_index"].to(self.device)
+            if self.to_device:
+                data = x["data"].to(self.device)
+                cc_index = x["pair_index"].to(self.device)
+            else:
+                data = x["data"]
+                cc_index = x["pair_index"]
             num_pairs = cc_index.shape[0]
             pbar = tqdm(range(0, num_pairs, self.batch_size))
         else:
             pbar = [0]
 
+        result = []
         for i in pbar:
 
             if self.use_pair_index:
                 c1 = cc_index[i : i + self.batch_size, 0]
                 c2 = cc_index[i : i + self.batch_size, 1]
-                data1 = torch.index_select(data, 0, c1)
-                data2 = torch.index_select(data, 0, c2)
+                if len(c1) == 1:  ## returns a view of the original tensor
+                    data1 = torch.select(data, 0, c1[0]).unsqueeze(0)
+                else:
+                    data1 = torch.index_select(data, 0, c1)
+                if len(c2) == 1:
+                    data2 = torch.select(data, 0, c1[0]).unsqueeze(0)
+                else:
+                    data2 = torch.index_select(data, 0, c2)
             else:
                 x0, x1 = x
-                data1 = x0["data"].to(self.device)
-                data2 = x1["data"].to(self.device)
+                if self.to_device:
+                    data1 = x0["data"].to(self.device)
+                    data2 = x1["data"].to(self.device)
+                else:
+                    data1 = x0["data"]
+                    data2 = x1["data"]
 
             if self.domain == "time":
                 ## using conv1d
@@ -70,7 +108,10 @@ class CCModel(nn.Module):
                 data2 = data2.view(nb2 * nc2, 1, nt2)
                 if self.channel_shift != 0:
                     xcor = F.conv1d(
-                        data1, torch.roll(data2, self.channel_shift, dims=-2), padding=self.nlag + 1, groups=nb1 * nc1
+                        data1,
+                        torch.roll(data2, self.channel_shift, dims=-2),
+                        padding=self.nlag + 1,
+                        groups=nb1 * nc1,
                     )
                 else:
                     xcor = F.conv1d(data1, data2, padding=self.nlag + 1, groups=nb1 * nc1)
@@ -87,6 +128,14 @@ class CCModel(nn.Module):
                 xcor = torch.roll(xcor_time, nfast // 2, dims=-1)[
                     ..., nfast // 2 - self.nlag + 1 : nfast // 2 + self.nlag
                 ]
+
+            if self.postprocessing is not None:
+                xcor = self.postprocessing(xcor)
+
+            ## TODO: add to results
+            result = {}
+
+        return result
 
         ## TODO: clean up post-processing
         # cross-correlation matrix for one event pair

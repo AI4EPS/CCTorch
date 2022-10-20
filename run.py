@@ -35,7 +35,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--data-list1", default=None, type=str, help="data list 1")
     parser.add_argument("--data-list2", default=None, type=str, help="data list 1")
     parser.add_argument("--data-path", default="./", type=str, help="data path")
-    parser.add_argument("--dataset-type", default="map", type=str, help="data loader type in {map, iterable}")
+    parser.add_argument("--dataset-type", default="iterable", type=str, help="data loader type in {map, iterable}")
     parser.add_argument("--block-num1", default=1, type=int, help="Number of blocks for the 1st data pair dimension")
     parser.add_argument("--block-num2", default=1, type=int, help="Number of blocks for the 2nd data pair dimension")
     parser.add_argument("--auto-xcorr", action="store_true", help="do auto-correlation for data list")
@@ -140,12 +140,14 @@ def main(args):
             data_path=args.data_path,
             device=args.device,
             transform=transform,
+            batch_size=args.batch_size,
             rank=rank,
             world_size=world_size,
         )
     else:
         raise ValueError(f"dataset_type {args.dataset_type} not supported")
 
+    print(f"{len(dataset) = }")
     if len(dataset) < world_size:
         raise ValueError(f"dataset size {len(dataset)} is smaller than world size {world_size}")
 
@@ -178,8 +180,18 @@ def main(args):
 
     metric_logger = utils.MetricLogger(delimiter="  ")
 
+    results = []
+    buffer_size = 1000
+
     for x in metric_logger.log_every(dataloader, 100, ""):
         result = ccmodel(x)
+        results.append(result)
+
+        if len(results) > buffer_size:
+            ## TODO: save results
+            # write_results(results, args)
+            pass
+            results = []
 
     ## TODO: cleanup writting
 

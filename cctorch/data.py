@@ -25,25 +25,26 @@ class CCDataset(Dataset):
         **kwargs,
     ):
         super(CCDataset).__init__()
-        if data_list1 is None:
+        ## pair_list has the highest priority
+        if pair_list is not None:
             self.pair_list, self.data_list1, self.data_list2 = read_pair_list(pair_list)
-        else:
-            self.data_list1 = list(set(pd.read_csv(data_list1, header=None, names=["event"])["event"].tolist()))
-            if data_list2 is None:
+        ## use data_list1 if exits and use pair_list as filtering
+        if data_list1 is not None:
+            self.data_list1 = pd.unique(pd.read_csv(data_list1, header=None)[0]).tolist()
+            if data_list2 is not None:
+                self.data_list2 = pd.unique(pd.read_csv(data_list2, header=None)[0]).tolist()
+            elif pair_list is None:
                 self.data_list2 = self.data_list1
-            else:
-                self.data_list2 = list(set(pd.read_csv(data_list2, header=None, names=["event"])["event"].tolist()))
-            if self.pair_list is None:
+            ## generate pair_list if not provided
+            if pair_list is None:
                 self.pair_list = generate_pairs(self.data_list1, self.data_list2)
-            else:
-                self.pair_list, _, _ = read_pair_list(pair_list)
 
         self.auto_xcorr = auto_xcorr
         self.block_num1 = block_num1
         self.block_num2 = block_num2
         self.group1 = [list(x) for x in np.array_split(self.data_list1, block_num1) if len(x) > 0]
         self.group2 = [list(x) for x in np.array_split(self.data_list2, block_num2) if len(x) > 0]
-        self.block_index = [(i, j) for i in range(len(self.group1)) for j in range(len(self.group2))]
+        self.block_index = generate_block_index(self.group1, self.group2, self.pair_list)
         self.data_path = Path(data_path)
         self.data_format = data_format
         self.transform = transform
@@ -90,7 +91,7 @@ class CCDataset(Dataset):
         return {"data": data, "info": info, "pair_index": pair_index}
 
     def __len__(self):
-        return self.block_num1 * self.block_num2
+        return len(self.block_index)
 
 
 class CCIterableDataset(IterableDataset):
@@ -106,33 +107,36 @@ class CCIterableDataset(IterableDataset):
         auto_xcorr=False,
         device="cpu",
         transform=None,
+        batch_size=32,
         rank=0,
         world_size=1,
         **kwargs,
     ):
         super(CCIterableDataset).__init__()
-        if data_list1 is None:
+        ## pair_list has the highest priority
+        if pair_list is not None:
             self.pair_list, self.data_list1, self.data_list2 = read_pair_list(pair_list)
-        else:
-            self.data_list1 = list(set(pd.read_csv(data_list1, header=None, names=["event"])["event"].tolist()))
-            if data_list2 is None:
+        ## use data_list1 if exits and use pair_list as filtering
+        if data_list1 is not None:
+            self.data_list1 = pd.unique(pd.read_csv(data_list1, header=None)[0]).tolist()
+            if data_list2 is not None:
+                self.data_list2 = pd.unique(pd.read_csv(data_list2, header=None)[0]).tolist()
+            elif pair_list is None:
                 self.data_list2 = self.data_list1
-            else:
-                self.data_list2 = list(set(pd.read_csv(data_list2, header=None, names=["event"])["event"].tolist()))
-            if self.pair_list is None:
+            ## generate pair_list if not provided
+            if pair_list is None:
                 self.pair_list = generate_pairs(self.data_list1, self.data_list2)
-            else:
-                self.pair_list, _, _ = read_pair_list(pair_list)
 
         self.auto_xcorr = auto_xcorr
         self.block_num1 = block_num1
         self.block_num2 = block_num2
         self.group1 = [list(x) for x in np.array_split(self.data_list1, block_num1) if len(x) > 0]
         self.group2 = [list(x) for x in np.array_split(self.data_list2, block_num2) if len(x) > 0]
-        self.block_index = [(i, j) for i in range(len(self.group1)) for j in range(len(self.group2))][rank::world_size]
+        self.block_index = generate_block_index(self.group1, self.group2, self.pair_list)[rank::world_size]
         self.data_path = Path(data_path)
         self.data_format = data_format
         self.transform = transform
+        self.batch_size = batch_size
         self.device = device
 
     def __iter__(self):
@@ -150,44 +154,72 @@ class CCIterableDataset(IterableDataset):
         for i, j in block_index:
             local_dict = {}
             event1, event2 = self.group1[i], self.group2[j]
+            data1, info1, data2, info2 = [], [], [], []
+            num = 0
             for ii in range(len(event1)):
                 for jj in range(len(event2)):
-
                     if (event1[ii], event2[jj]) not in self.pair_list:
                         continue
 
                     if event1[ii] not in local_dict:
                         data_dict1 = read_data(event1[ii], self.data_path, self.data_format)
+                        data_dict1["data"] = torch.tensor(data_dict1["data"]).to(self.device)
                         local_dict[event1[ii]] = data_dict1
                     else:
                         data_dict1 = local_dict[event1[ii]]
 
                     if event2[jj] not in local_dict:
                         data_dict2 = read_data(event2[jj], self.data_path, self.data_format)
+                        data_dict2["data"] = torch.tensor(data_dict2["data"]).to(self.device)
                         local_dict[event2[jj]] = data_dict2
                     else:
                         data_dict2 = local_dict[event2[jj]]
 
-                    data1 = torch.tensor(data_dict1["data"]).to(self.device)
-                    data1 = data1.unsqueeze(0)  # add batch dimension
-                    data2 = torch.tensor(data_dict2["data"]).to(self.device)
-                    data2 = data2.unsqueeze(0)  # add batch dimension
+                    data1.append(data_dict1["data"])
+                    info1.append(data_dict1["info"])
+                    data2.append(data_dict2["data"])
+                    info2.append(data_dict2["info"])
 
-                    if self.transform is not None:
-                        data1 = self.transform(data1)
-                        data2 = self.transform(data2)
+                    num += 1
+                    if num == self.batch_size:
+                        num = 0
+                        data_batch1 = torch.stack(data1, dim=0)
+                        data_batch2 = torch.stack(data2, dim=0)
+                        data1, info1, data2, info2 = [], [], [], []
+                        if self.transform is not None:
+                            data_batch1 = self.transform(data_batch1)
+                            data_batch2 = self.transform(data_batch2)
+                        ## TODO: fix yield for batch size
+                        yield {
+                            "event": event1[ii],
+                            "data": data_batch1,
+                            "event_time": data_dict1["info"]["event"]["event_time"],
+                            "shift_index": data_dict1["info"]["shift_index"],
+                        }, {
+                            "event": event2[jj],
+                            "data": data_batch2,
+                            "event_time": data_dict2["info"]["event"]["event_time"],
+                            "shift_index": data_dict2["info"]["shift_index"],
+                        }
 
-                    yield {
-                        "event": event1[ii],
-                        "data": data1,
-                        "event_time": data_dict1["info"]["event"]["event_time"],
-                        "shift_index": data_dict1["info"]["shift_index"],
-                    }, {
-                        "event": event2[jj],
-                        "data": data2,
-                        "event_time": data_dict2["info"]["event"]["event_time"],
-                        "shift_index": data_dict2["info"]["shift_index"],
-                    }
+            if num > 0:
+                data_batch1 = torch.stack(data1, dim=0).to(self.device)
+                data_batch2 = torch.stack(data2, dim=0).to(self.device)
+                if self.transform is not None:
+                    data_batch1 = self.transform(data_batch1)
+                    data_batch2 = self.transform(data_batch2)
+                ## TODO: fix yield for batch size
+                yield {
+                    "event": event1[ii],
+                    "data": data_batch1,
+                    "event_time": data_dict1["info"]["event"]["event_time"],
+                    "shift_index": data_dict1["info"]["shift_index"],
+                }, {
+                    "event": event2[jj],
+                    "data": data_batch2,
+                    "event_time": data_dict2["info"]["event"]["event_time"],
+                    "shift_index": data_dict2["info"]["shift_index"],
+                }
 
             del local_dict
             if self.device == "cuda":
@@ -201,14 +233,22 @@ class CCIterableDataset(IterableDataset):
         else:
             num_workers = worker_info.num_workers
             worker_id = worker_info.id
+
         num_samples = 0
         for i, j in self.block_index[worker_id::num_workers]:
             event1, event2 = self.group1[i], self.group2[j]
+            num = 0
             for ii in range(len(event1)):
                 for jj in range(len(event2)):
                     if (event1[ii], event2[jj]) not in self.pair_list:
                         continue
-                    num_samples += 1
+                    num += 1
+                    if num == self.batch_size:
+                        num = 0
+                        num_samples += 1
+            if num > 0:
+                num_samples += 1
+
         return num_samples
 
 
@@ -240,6 +280,22 @@ def read_pair_list(file_pair_list):
     data_list1 = sorted(list(set(pairs_df["event1"].tolist())))
     data_list2 = sorted(list(set(pairs_df["event2"].tolist())))
     return pair_list, data_list1, data_list2
+
+
+def generate_block_index(group1, group2, pair_list, min_sample_per_index=1):
+    block_index = [(i, j) for i in range(len(group1)) for j in range(len(group2))]
+    num_empty_index = []
+    num_samples = 0
+    for i, j in block_index:
+        event1, event2 = group1[i], group2[j]
+        for ii in range(len(event1)):
+            for jj in range(len(event2)):
+                if (event1[ii], event2[jj]) not in pair_list:
+                    continue
+                num_samples += 1
+        if num_samples > min_sample_per_index:
+            num_empty_index.append((i, j))
+    return num_empty_index
 
 
 def read_data(event, data_path, format="h5"):
