@@ -25,15 +25,18 @@ class CCDataset(Dataset):
         **kwargs,
     ):
         super(CCDataset).__init__()
-        if pair_list is not None:
+        if data_list1 is None:
             self.pair_list, self.data_list1, self.data_list2 = read_pair_list(pair_list)
-        elif data_list1 is not None:
+        else:
             self.data_list1 = list(set(pd.read_csv(data_list1, header=None, names=["event"])["event"].tolist()))
-            if data_list2 is not None:
-                self.data_list2 = list(set(pd.read_csv(data_list2, header=None, names=["event"])["event"].tolist()))
-            else:
+            if data_list2 is None:
                 self.data_list2 = self.data_list1
-            self.pair_list = generate_pairs(self.data_list1, self.data_list2)
+            else:
+                self.data_list2 = list(set(pd.read_csv(data_list2, header=None, names=["event"])["event"].tolist()))
+            if self.pair_list is None:
+                self.pair_list = generate_pairs(self.data_list1, self.data_list2)
+            else:
+                self.pair_list, _, _ = read_pair_list(pair_list)
 
         self.auto_xcorr = auto_xcorr
         self.block_num1 = block_num1
@@ -108,15 +111,18 @@ class CCIterableDataset(IterableDataset):
         **kwargs,
     ):
         super(CCIterableDataset).__init__()
-        if pair_list is not None:
+        if data_list1 is None:
             self.pair_list, self.data_list1, self.data_list2 = read_pair_list(pair_list)
-        elif data_list1 is not None:
+        else:
             self.data_list1 = list(set(pd.read_csv(data_list1, header=None, names=["event"])["event"].tolist()))
-            if data_list2 is not None:
-                self.data_list2 = list(set(pd.read_csv(data_list2, header=None, names=["event"])["event"].tolist()))
-            else:
+            if data_list2 is None:
                 self.data_list2 = self.data_list1
-            self.pair_list = generate_pairs(self.data_list1, self.data_list2)
+            else:
+                self.data_list2 = list(set(pd.read_csv(data_list2, header=None, names=["event"])["event"].tolist()))
+            if self.pair_list is None:
+                self.pair_list = generate_pairs(self.data_list1, self.data_list2)
+            else:
+                self.pair_list, _, _ = read_pair_list(pair_list)
 
         self.auto_xcorr = auto_xcorr
         self.block_num1 = block_num1
