@@ -1,7 +1,7 @@
+import logging
 import multiprocessing as mp
 from multiprocessing import Manager
 from pathlib import Path
-import logging
 
 import h5py
 import pandas as pd
@@ -31,24 +31,14 @@ def get_args_parser(add_help=True):
     import argparse
 
     parser = argparse.ArgumentParser(description="Cross-Correlation using Pytorch", add_help=add_help)
-    parser.add_argument(
-        "--pair-list",
-        default="/home/jxli/packages/CCTorch/tests/pair_mammoth_ccfm_test.txt",
-        type=str,
-        help="pair list",
-    )
-    parser.add_argument(
-        "--path-data", default="/kuafu/jxli/Data/DASEventData/mammoth_south/temp", type=str, help="data path"
-    )
-
-    parser.add_argument("--block_num1", default=3, type=int, help="Number of blocks for the 1st data pair dimension")
-    parser.add_argument("--block_num2", default=3, type=int, help="Number of blocks for the 2nd data pair dimension")
-    parser.add_argument(
-        "--generate-pair",
-        action="store_true",
-        help="generate full pair list from data_list1 and data_list2 if turning on this option",
-    )
-    parser.add_argument("--auto-xcor", action="store_true", help="do auto-correlation for data list")
+    parser.add_argument("--pair-list", default=None, type=str, help="pair list")
+    parser.add_argument("--data-list1", default=None, type=str, help="data list 1")
+    parser.add_argument("--data-list2", default=None, type=str, help="data list 1")
+    parser.add_argument("--data-path", default="./", type=str, help="data path")
+    parser.add_argument("--dataset-type", default="map", type=str, help="data loader type in {map, iterable}")
+    parser.add_argument("--block_num1", default=1, type=int, help="Number of blocks for the 1st data pair dimension")
+    parser.add_argument("--block_num2", default=1, type=int, help="Number of blocks for the 2nd data pair dimension")
+    parser.add_argument("--auto-xcorr", action="store_true", help="do auto-correlation for data list")
 
     # xcor parameters
     parser.add_argument("--domain", default="time", type=str, help="time domain or frequency domain")
@@ -84,38 +74,37 @@ def get_args_parser(add_help=True):
 
     parser.add_argument(
         "--mode",
-        default="differential_time",
+        default="CC",
         type=str,
-        help="mode for tasks of differential_time, template_matching, and ambient_noise",
+        help="mode for tasks of CC (cross-correlation), TM (template matching), and AM (ambient noise)",
     )
-    parser.add_argument("--batch-size", default=8, type=int, help="batch size")
-    parser.add_argument("--workers", default=16, type=int, help="data loading workers")
-    parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu Default: cuda)")
+    parser.add_argument("--batch-size", default=1, type=int, help="batch size")
+    parser.add_argument("--workers", default=0, type=int, help="data loading workers")
+    parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu, Default: cuda)")
 
     # distributed training parameters
     parser.add_argument("--world-size", default=1, type=int, help="number of distributed processes")
     parser.add_argument("--dist-url", default="env://", type=str, help="url used to set up distributed training")
 
-    ## TODO: Add more arguments for visualization, data processing, etc
     return parser
 
 
 def main(args):
 
-    if args.path_xcor_data:
-        path_xcor_data = f"{args.path_xcor_data}_{args.channel_shift}"
-        utils.mkdir(path_xcor_data)
-    if args.path_xcor_pick:
-        path_xcor_pick = f"{args.path_xcor_pick}_{args.channel_shift}"
-        utils.mkdir(path_xcor_pick)
-
-    logging.basicConfig(filename='cctorch.log', level=logging.INFO)
+    logging.basicConfig(filename="cctorch.log", level=logging.INFO)
     utils.init_distributed_mode(args)
+    rank = utils.get_rank() if args.distributed else 0
+    world_size = utils.get_world_size() if args.distributed else 1
+    device = torch.device(args.device)
     print(args)
 
-    device = torch.device(args.device)
-    manager = Manager()
-    shared_dict = manager.dict()
+    if utils.is_main_process():
+        if args.path_xcor_data:
+            path_xcor_data = f"{args.path_xcor_data}_{args.channel_shift}"
+            utils.mkdir(path_xcor_data)
+        if args.path_xcor_pick:
+            path_xcor_pick = f"{args.path_xcor_pick}_{args.channel_shift}"
+            utils.mkdir(path_xcor_pick)
 
     transform_list = []
     if args.taper:
@@ -127,32 +116,38 @@ def main(args):
     elif args.domain == "frequency":
         transform_list.append(T.Lambda(fft_real_normalize))
     transform = T.Compose(transform_list)
-    # transform = get_transform()
 
-    pair_list = args.pair_list
-    data_path = args.path_data
-
-    rank = utils.get_rank() if args.distributed else 0
-    world_size = utils.get_world_size() if args.distributed else 1
-
-    # dataset = CCDataset(
-    #     pair_list, data_path, shared_dict, device=args.device, transform=transform, rank=rank, world_size=world_size
-    # )
-
-    dataset = CCIterableDataset(
-        pair_list=pair_list,
-        generate_pair=args.generate_pair,
-        auto_xcor=args.auto_xcor,
-        block_num1=args.block_num1,
-        block_num2=args.block_num2,
-        data_path=data_path,
-        shared_dict=shared_dict,
-        device=args.device,
-        transform=transform,
-        rank=rank,
-        world_size=world_size,
-    )
-    # print(f"{len(dataset) = }")
+    if args.dataset_type == "map":
+        dataset = CCDataset(
+            pair_list=args.pair_list,
+            data_list1=args.data_list1,
+            data_list2=args.data_list2,
+            auto_xcorr=args.auto_xcorr,
+            block_num1=args.block_num1,
+            block_num2=args.block_num2,
+            data_path=args.data_path,
+            device=args.device,
+            transform=transform,
+            rank=rank,
+            world_size=world_size,
+        )
+    elif args.dataset_type == "iterable":
+        dataset = CCIterableDataset(
+            pair_list=args.pair_list,
+            data_list1=args.data_list1,
+            data_list2=args.data_list2,
+            auto_xcorr=args.auto_xcorr,
+            block_num1=args.block_num1,
+            block_num2=args.block_num2,
+            data_path=args.data_path,
+            device=args.device,
+            transform=transform,
+            rank=rank,
+            world_size=world_size,
+        )
+    else:
+        raise ValueError(f"dataset_type {args.dataset_type} not supported")
+    print(f"{len(dataset) = }")
 
     if args.distributed:
         sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=False)
@@ -161,21 +156,13 @@ def main(args):
 
     dataloader = DataLoader(
         dataset,
-        # batch_size=args.batch_size,
-        # num_workers=args.workers,
         batch_size=None,
-        num_workers=0,
-        # sampler=sampler,
-        sampler=None,
-        # pin_memory=True
+        num_workers=args.workers,
+        sampler=sampler if args.dataset_type == "Dataset" else None,
         pin_memory=False,
     )
 
-    ## TODO: check if DataParallel is better for dataset memory
     ccmodel = CCModel(
-        device=args.device,
-        to_device=False,
-        batching=None,
         dt=0.001,
         maxlag=args.maxlag,
         reduce_t=args.reduce_t,
@@ -183,8 +170,13 @@ def main(args):
         channel_shift=args.channel_shift,
         mccc=args.mccc,
         domain=args.domain,
+        use_pair_index=True if args.dataset_type == "map" else False,
+        device=args.device,
+        batching=False,
     )
-    ccmodel.to(device)
+    ccmodel.to(args.device)
+
+    ## only used for model with parameters
     # if args.distributed:
     #     # ccmodel = torch.nn.parallel.DistributedDataParallel(ccmodel, device_ids=[args.gpu])
     #     # model_without_ddp = ccmodel.module
@@ -193,6 +185,7 @@ def main(args):
     #     ccmodel = nn.DataParallel(ccmodel)
 
     metric_logger = utils.MetricLogger(delimiter="  ")
+
     if args.path_xcor_matrix:
         cc_matrix = torch.zeros([len(dataset.data_list1), len(dataset.data_list2)], device=args.device)
         id_row = torch.tensor(dataset.data_list1, device=args.device)
@@ -204,16 +197,23 @@ def main(args):
         channel_index = None
 
     writing_processes = []
-    ctx = mp.get_context('spawn')
+    ctx = mp.get_context("spawn")
     ncpu = mp.cpu_count()
-    for x in metric_logger.log_every(dataloader, 100, "CC: "):
-        # print(x[0]["data"].shape)
-        # print(x[1]["data"].shape)
+    for x in metric_logger.log_every(dataloader, 1, "CC: "):
         result = ccmodel(x)
-        # write xcor to file
+
         if args.path_xcor_data:
             # write_xcor_data_to_h5(result, path_xcor_data, phase1=args.phase_type1, phase2=args.phase_type1)
-            p = ctx.Process(target=write_xcor_data_to_h5, args=(result, path_xcor_data,), kwargs={"phase1":args.phase_type1, "phase2":args.phase_type1})
+            for k in result:
+                result[k] = result[k].cpu()
+            p = ctx.Process(
+                target=write_xcor_data_to_h5,
+                args=(
+                    result,
+                    path_xcor_data,
+                ),
+                kwargs={"phase1": args.phase_type1, "phase2": args.phase_type1},
+            )
             p.start()
             writing_processes.append(p)
         if args.path_xcor_pick and args.mccc:
@@ -226,7 +226,7 @@ def main(args):
             p = ctx.Process(target=write_xcor_mccc_pick_to_csv, args=(result, x, path_xcor_pick, channel_index))
             p.start()
             writing_processes.append(p)
-        
+
         ## prevent too many processes
         if len(writing_processes) > ncpu:
             for p in writing_processes:
@@ -235,7 +235,7 @@ def main(args):
 
         ## TODO: ADD post-processing
         ## TODO: Add visualization
-    
+
     logging.info("Waiting for writing processes to finish...")
     for p in writing_processes:
         p.join()
