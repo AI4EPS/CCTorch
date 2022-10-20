@@ -124,7 +124,7 @@ def main(args):
             block_num1=args.block_num1,
             block_num2=args.block_num2,
             data_path=args.data_path,
-            device=args.device,
+            device="cpu" if args.workers > 0 else args.device,
             transform=transform,
             rank=rank,
             world_size=world_size,
