@@ -287,8 +287,8 @@ def read_pair_list(file_pair_list):
 def generate_block_index(group1, group2, pair_list, min_sample_per_index=1):
     block_index = [(i, j) for i in range(len(group1)) for j in range(len(group2))]
     num_empty_index = []
-    num_samples = 0
     for i, j in block_index:
+        num_samples = 0
         event1, event2 = group1[i], group2[j]
         for ii in range(len(event1)):
             for jj in range(len(event2)):
