@@ -14,31 +14,23 @@ from .transforms import (
 class CCModel(nn.Module):
     def __init__(
         self,
-        dt,
-        maxlag,
-        nma=20,
-        channel_shift=0,
-        mccc=False,
-        reduce_t=True,
-        reduce_x=False,
-        domain="time",
+        config,
         postprocess=None,
-        use_pair_index=False,
         batch_size=16,
         to_device=False,
         device="cuda",
     ):
         super(CCModel, self).__init__()
-        self.dt = dt
-        self.nlag = int(maxlag / dt)
-        self.nma = nma
-        self.channel_shift = channel_shift
-        self.reduce_t = reduce_t
-        self.reduce_x = reduce_x
-        self.domain = domain
-        self.mccc = mccc
+        self.dt = config.dt
+        self.nlag = int(config.maxlag / config.dt)
+        self.nma = config.nma
+        self.channel_shift = config.channel_shift
+        self.reduce_t = config.reduce_t
+        self.reduce_x = config.reduce_x
+        self.domain = config.domain
+        self.mccc = config.mccc
+        self.use_pair_index = config.use_pair_index
         self.postprocessing = postprocess
-        self.use_pair_index = use_pair_index
         self.batch_size = batch_size
         self.to_device = to_device
         self.device = device
@@ -110,10 +102,7 @@ class CCModel(nn.Module):
             data2 = data2.view(nb2 * nc2, 1, nt2)
             if self.channel_shift != 0:
                 xcor = F.conv1d(
-                    data1,
-                    torch.roll(data2, self.channel_shift, dims=-2),
-                    padding=self.nlag + 1,
-                    groups=nb1 * nc1,
+                    data1, torch.roll(data2, self.channel_shift, dims=-2), padding=self.nlag + 1, groups=nb1 * nc1
                 )
             else:
                 xcor = F.conv1d(data1, data2, padding=self.nlag + 1, groups=nb1 * nc1)

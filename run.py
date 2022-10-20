@@ -1,5 +1,6 @@
 import logging
 import multiprocessing as mp
+from dataclasses import dataclass
 from multiprocessing import Manager
 from pathlib import Path
 
@@ -59,7 +60,7 @@ def get_args_parser(add_help=True):
         "--mccc", action="store_true", help="use mccc to reduce time axis: only have effect when reduce_t is true"
     )
     parser.add_argument("--phase-type1", default="P", type=str, help="Phase type of the 1st data window")
-    parser.add_argument("--phase-type2", default="P", type=str, help="Phase type of the 2nd data window")
+    parser.add_argument("--phase-type2", default="S", type=str, help="Phase type of the 2nd data window")
     parser.add_argument(
         "--path-xcor-data", default="", type=str, help="path to save xcor data output: path_{channel_shift}"
     )
@@ -69,7 +70,6 @@ def get_args_parser(add_help=True):
     parser.add_argument(
         "--path-xcor-matrix", default="", type=str, help="path to save xcor matrix output: path_{channel_shift}"
     )
-
     parser.add_argument("--path-dasinfo", default="", type=str, help="csv file with das channel info")
 
     parser.add_argument(
@@ -164,16 +164,22 @@ def main(args):
         pin_memory=False,
     )
 
+    @dataclass
+    class CCConfig:
+        dt = 0.001
+        maxlag = args.maxlag
+        nma = (20, 0)
+        reduce_t = args.reduce_t
+        reduce_x = args.reduce_x
+        channel_shift = args.channel_shift
+        mccc = args.mccc
+        use_pair_index = True if args.dataset_type == "map" else False
+        domain = args.domain
+
     ccmodel = CCModel(
-        dt=0.001,
-        maxlag=args.maxlag,
-        reduce_t=args.reduce_t,
-        reduce_x=args.reduce_x,
-        channel_shift=args.channel_shift,
-        mccc=args.mccc,
-        domain=args.domain,
-        use_pair_index=True if args.dataset_type == "map" else False,
+        config=CCConfig(),
         batch_size=args.batch_size,  ## only useful for dataset_type == map
+        to_device=False,  ## to_device is done in dataset in default
         device=args.device,
     )
     ccmodel.to(args.device)
