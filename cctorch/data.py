@@ -284,7 +284,7 @@ def read_pair_list(file_pair_list):
     return pair_list, data_list1, data_list2
 
 
-def generate_block_index(group1, group2, pair_list, min_sample_per_index=1):
+def generate_block_index(group1, group2, pair_list, min_sample_per_block=1):
     block_index = [(i, j) for i in range(len(group1)) for j in range(len(group2))]
     num_empty_index = []
     for i, j in block_index:
@@ -295,7 +295,7 @@ def generate_block_index(group1, group2, pair_list, min_sample_per_index=1):
                 if (event1[ii], event2[jj]) not in pair_list:
                     continue
                 num_samples += 1
-        if num_samples > min_sample_per_index:
+        if num_samples > min_sample_per_block:
             num_empty_index.append((i, j))
     return num_empty_index
 
