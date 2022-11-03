@@ -5,6 +5,11 @@
 ## Single GPU
 python run.py
 
+- Example for ambient noise
+```
+python run.py --data-list1=tests/data_am1.txt --data-path=tests --dt=0.04 --maxlag=30  --mode=AM --batch-size=200
+```
+
 ## Multi GPUs (e.g., using 8 GPUs)
 ```
 torchrun --standalone --nproc_per_node=8 run.py

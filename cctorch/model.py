@@ -3,26 +3,19 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from .transforms import (
-    interp_time_cubic_spline,
-    pick_mccc_refine,
-    pick_Rkt_maxabs,
-    pick_Rkt_mccc,
-)
-
 
 class CCModel(nn.Module):
     def __init__(
         self,
         config,
-        postprocess=None,
+        transforms=None,
         batch_size=16,
         to_device=False,
         device="cuda",
     ):
         super(CCModel, self).__init__()
         self.dt = config.dt
-        self.nlag = int(config.maxlag / config.dt)
+        self.nlag = config.nlag
         self.nma = config.nma
         self.channel_shift = config.channel_shift
         self.reduce_t = config.reduce_t
@@ -30,7 +23,7 @@ class CCModel(nn.Module):
         self.domain = config.domain
         self.mccc = config.mccc
         self.use_pair_index = config.use_pair_index
-        self.postprocessing = postprocess
+        self.transforms = transforms
         self.batch_size = batch_size
         self.to_device = to_device
         self.device = device
@@ -56,7 +49,7 @@ class CCModel(nn.Module):
             data2 = x1["data"]
 
         if self.domain == "time":
-            ## using conv1d
+            ## using conv1d in time domain
             nb1, nc1, nt1 = data1.shape
             data1 = data1.view(1, nb1 * nc1, nt1)
             nb2, nc2, nt2 = data2.shape
@@ -79,47 +72,11 @@ class CCModel(nn.Module):
             xcor_time = torch.fft.irfft(xcor_freq, n=nfast, dim=-1)
             xcor = torch.roll(xcor_time, nfast // 2, dims=-1)[..., nfast // 2 - self.nlag + 1 : nfast // 2 + self.nlag]
 
-        if self.postprocessing is not None:
-            xcor = self.postprocessing(xcor)
+        if self.transforms is not None:
+            xcor = self.transforms(xcor)
 
-        ## TODO: add to results
-        result = {}
-
-        return result
-
-        ## TODO: clean up post-processing
-        # cross-correlation matrix for one event pair
-        # result = {"id1": event1, "id2": event2, "xcor": xcor, "dt": self.dt, "channel_shift": self.channel_shift}
-        # picking traveltime difference
-        # if self.reduce_t:
-        #     # MCCC pick
-        #     if self.mccc:
-        #         scale_factor = 1
-        #         # xcor_interp = interp_time_cubic_spline(xcor[0, :, :], scale_factor=scale_factor)
-        #         pick_dt, G0, d0 = pick_Rkt_mccc(
-        #             xcor[0, :, :], self.dt / scale_factor, scale_factor=1, verbose=False, cuda=True
-        #         )
-        #         vmax, vmin, cc_dt = pick_mccc_refine(
-        #             xcor[0, :, :], self.dt / scale_factor, pick_dt, G0=G0, d0=d0, verbose=False
-        #         )
-        #         result["cc_mean"] = torch.mean(torch.abs(vmax))
-        #         if not self.reduce_x:
-        #             result["cc_main"] = vmax
-        #             result["cc_side"] = vmin
-        #             result["cc_dt"] = cc_dt
-        #             result["cc_mean"] = torch.mean(torch.abs(vmax))
-        #     # Simple pick
-        #     else:
-        #         xcor[:] = self.moving_average(xcor, nma=self.nma)
-        #         if self.reduce_x:
-        #             vmax = torch.mean(torch.max(torch.abs(xcor), dim=-1).values, dim=-1, keepdim=True)
-        #             result["cc_mean"] = vmax
-        #         else:
-        #             vmax, vmin, tmax = pick_Rkt_maxabs(xcor, self.dt)
-        #             result["cc_main"] = vmax
-        #             result["cc_side"] = vmin
-        #             result["cc_dt"] = tmax
-        # return result
+        pair_index = [f"{i}_{j}" for i, j in zip(x0["info"]["index"], x1["info"]["index"])]
+        return {"xcorr": xcor.cpu().numpy(), "info": {"pair_index": pair_index}}
 
     def forward_map(self, x):
         """Perform cross-correlation on input data (dataset_type == map)
@@ -129,19 +86,18 @@ class CCModel(nn.Module):
                 - pair_index (torch.Tensor): pair index
                 - info (dict): attributes information
         """
-        # if self.use_pair_index:
         if self.to_device:
             data = x["data"].to(self.device)
-            cc_index = x["pair_index"].to(self.device)
+            pair_index = x["pair_index"].to(self.device)
         else:
             data = x["data"]
-            cc_index = x["pair_index"]
-        num_pairs = cc_index.shape[0]
+            pair_index = x["pair_index"]
+        num_pairs = pair_index.shape[0]
 
         for i in tqdm(range(0, num_pairs, self.batch_size)):
 
-            c1 = cc_index[i : i + self.batch_size, 0]
-            c2 = cc_index[i : i + self.batch_size, 1]
+            c1 = pair_index[i : i + self.batch_size, 0]
+            c2 = pair_index[i : i + self.batch_size, 1]
             if len(c1) == 1:  ## returns a view of the original tensor
                 data1 = torch.select(data, 0, c1[0]).unsqueeze(0)
             else:
@@ -152,7 +108,7 @@ class CCModel(nn.Module):
                 data2 = torch.index_select(data, 0, c2)
 
             if self.domain == "time":
-                ## using conv1d
+                ## using conv1d in time domain
                 nb1, nc1, nt1 = data1.shape
                 data1 = data1.view(1, nb1 * nc1, nt1)
                 nb2, nc2, nt2 = data2.shape
@@ -177,11 +133,7 @@ class CCModel(nn.Module):
                     ..., nfast // 2 - self.nlag + 1 : nfast // 2 + self.nlag
                 ]
 
-            if self.postprocessing is not None:
-                xcor = self.postprocessing(xcor)
+            if self.transforms is not None:
+                xcor = self.transforms(xcor)
 
-            yield {"xcorr": xcor}
-
-    def moving_average(self, x, nma=20):
-        m = torch.nn.AvgPool1d(nma, stride=1, padding=nma // 2)
-        return m(x.permute(0, 2, 1))[:, :, : x.shape[1]].permute(0, 2, 1)
+        return {"xcorr": xcor.cpu().numpy(), "info": {"pair_index": pair_index}}

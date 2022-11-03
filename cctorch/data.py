@@ -3,13 +3,17 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pandas as pd
+import scipy.signal
 import torch
+import torch.nn.functional as F
+import torchaudio
 from torch.utils.data import Dataset, IterableDataset
 
 
 class CCDataset(Dataset):
     def __init__(
         self,
+        config=None,
         pair_list=None,
         data_list1=None,
         data_list2=None,
@@ -17,9 +21,8 @@ class CCDataset(Dataset):
         data_format="h5",
         block_num1=1,
         block_num2=1,
-        auto_xcorr=False,
         device="cpu",
-        transform=None,
+        transforms=None,
         rank=0,
         world_size=1,
         **kwargs,
@@ -38,9 +41,10 @@ class CCDataset(Dataset):
                 self.data_list2 = self.data_list1
             ## generate pair_list if not provided
             if pair_list is None:
-                self.pair_list = generate_pairs(self.data_list1, self.data_list2)
+                self.pair_list = generate_pairs(self.data_list1, self.data_list2, config.auto_xcorr)
 
-        self.auto_xcorr = auto_xcorr
+        self.mode = config.mode
+        self.config = config
         self.block_num1 = block_num1
         self.block_num2 = block_num2
         self.group1 = [list(x) for x in np.array_split(self.data_list1, block_num1) if len(x) > 0]
@@ -48,7 +52,7 @@ class CCDataset(Dataset):
         self.block_index = generate_block_index(self.group1, self.group2, self.pair_list)
         self.data_path = Path(data_path)
         self.data_format = data_format
-        self.transform = transform
+        self.transforms = transforms
         self.device = device
 
     def __getitem__(self, idx):
@@ -83,8 +87,8 @@ class CCDataset(Dataset):
             data = torch.stack(data, dim=0).to(self.device)
             pair_index = torch.tensor(pair_index).to(self.device)
 
-            if self.transform is not None:
-                data = self.transform(data)
+            if self.transforms is not None:
+                data = self.transforms(data)
         else:
             data = torch.empty((1, 1, 1), dtype=torch.float32).to(self.device)
             pair_index = torch.tensor([[0, 0]], dtype=torch.int64).to(self.device)
@@ -98,6 +102,7 @@ class CCDataset(Dataset):
 class CCIterableDataset(IterableDataset):
     def __init__(
         self,
+        config=None,
         pair_list=None,
         data_list1=None,
         data_list2=None,
@@ -105,9 +110,8 @@ class CCIterableDataset(IterableDataset):
         data_format="h5",
         block_num1=1,
         block_num2=1,
-        auto_xcorr=False,
         device="cpu",
-        transform=None,
+        transforms=None,
         batch_size=32,
         rank=0,
         world_size=1,
@@ -127,9 +131,10 @@ class CCIterableDataset(IterableDataset):
                 self.data_list2 = self.data_list1
             ## generate pair_list if not provided
             if pair_list is None:
-                self.pair_list = generate_pairs(self.data_list1, self.data_list2)
+                self.pair_list = generate_pairs(self.data_list1, self.data_list2, config.auto_xcorr)
 
-        self.auto_xcorr = auto_xcorr
+        self.mode = config.mode
+        self.config = config
         self.block_num1 = block_num1
         self.block_num2 = block_num2
         self.group1 = [list(x) for x in np.array_split(self.data_list1, block_num1) if len(x) > 0]
@@ -137,7 +142,7 @@ class CCIterableDataset(IterableDataset):
         self.block_index = generate_block_index(self.group1, self.group2, self.pair_list)[rank::world_size]
         self.data_path = Path(data_path)
         self.data_format = data_format
-        self.transform = transform
+        self.transforms = transforms
         self.batch_size = batch_size
         self.device = device
 
@@ -149,7 +154,11 @@ class CCIterableDataset(IterableDataset):
         else:
             num_workers = worker_info.num_workers
             worker_id = worker_info.id
-        return iter(self.sample(self.block_index[worker_id::num_workers]))
+
+        if self.mode == "AM":
+            return iter(self.sample_ambient_noise(self.data_list1[worker_id::num_workers]))
+        else:
+            return iter(self.sample(self.block_index[worker_id::num_workers]))
 
     def sample(self, block_index):
 
@@ -164,70 +173,121 @@ class CCIterableDataset(IterableDataset):
                         continue
 
                     if event1[ii] not in local_dict:
-                        data_dict1 = read_data(event1[ii], self.data_path, self.data_format)
-                        data_dict1["data"] = torch.tensor(data_dict1["data"]).to(self.device)
-                        local_dict[event1[ii]] = data_dict1
+                        meta1 = read_data(event1[ii], self.data_path, self.data_format)
+                        data = torch.tensor(meta1["data"]).to(self.device).unsqueeze(0)  ## add batch dimension
+                        if self.transforms is not None:
+                            data = self.transforms(data)
+                        meta1["data"] = data
+                        local_dict[event1[ii]] = meta1
                     else:
-                        data_dict1 = local_dict[event1[ii]]
+                        meta1 = local_dict[event1[ii]]
 
                     if event2[jj] not in local_dict:
-                        data_dict2 = read_data(event2[jj], self.data_path, self.data_format)
-                        data_dict2["data"] = torch.tensor(data_dict2["data"]).to(self.device)
-                        local_dict[event2[jj]] = data_dict2
+                        meta2 = read_data(event2[jj], self.data_path, self.data_format)
+                        data = torch.tensor(meta2["data"]).to(self.device).unsqueeze(0)  ## add batch dimension
+                        if self.transforms is not None:
+                            data = self.transforms(data)
+                        meta1["data"] = data
+                        local_dict[event2[jj]] = meta2
                     else:
-                        data_dict2 = local_dict[event2[jj]]
+                        meta2 = local_dict[event2[jj]]
 
-                    data1.append(data_dict1["data"])
-                    info1.append(data_dict1["info"])
-                    data2.append(data_dict2["data"])
-                    info2.append(data_dict2["info"])
+                    data1.append(meta1["data"])
+                    info1.append(meta1["info"])
+                    data2.append(meta2["data"])
+                    info2.append(meta2["info"])
 
                     num += 1
                     if num == self.batch_size:
                         num = 0
-                        data_batch1 = torch.stack(data1, dim=0)
-                        data_batch2 = torch.stack(data2, dim=0)
-                        data1, info1, data2, info2 = [], [], [], []
-                        if self.transform is not None:
-                            data_batch1 = self.transform(data_batch1)
-                            data_batch2 = self.transform(data_batch2)
+                        data_batch1 = torch.cat(data1, dim=0)
+                        data_batch2 = torch.cat(data2, dim=0)
                         ## TODO: fix yield for batch size
-                        yield {
-                            "event": event1[ii],
-                            "data": data_batch1,
-                            "event_time": data_dict1["info"]["event"]["event_time"],
-                            "shift_index": data_dict1["info"]["shift_index"],
-                        }, {
-                            "event": event2[jj],
-                            "data": data_batch2,
-                            "event_time": data_dict2["info"]["event"]["event_time"],
-                            "shift_index": data_dict2["info"]["shift_index"],
-                        }
+                        info_batch1 = None
+                        info_batch2 = None
+                        data1, info1, data2, info2 = [], [], [], []
+                        yield {"data": data_batch1, "info": info_batch1}, {"data": data_batch2, "info": info_batch2}
 
+            ## yield the last batch
             if num > 0:
-                data_batch1 = torch.stack(data1, dim=0).to(self.device)
-                data_batch2 = torch.stack(data2, dim=0).to(self.device)
-                if self.transform is not None:
-                    data_batch1 = self.transform(data_batch1)
-                    data_batch2 = self.transform(data_batch2)
+                data_batch1 = torch.cat(data1, dim=0)
+                data_batch2 = torch.cat(data2, dim=0)
                 ## TODO: fix yield for batch size
-                yield {
-                    "event": event1[ii],
-                    "data": data_batch1,
-                    "event_time": data_dict1["info"]["event"]["event_time"],
-                    "shift_index": data_dict1["info"]["shift_index"],
-                }, {
-                    "event": event2[jj],
-                    "data": data_batch2,
-                    "event_time": data_dict2["info"]["event"]["event_time"],
-                    "shift_index": data_dict2["info"]["shift_index"],
-                }
+                info_batch1 = None
+                info_batch2 = None
+                data1, info1, data2, info2 = [], [], [], []
+                yield {"data": data_batch1, "info": info_batch1}, {"data": data_batch2, "info": info_batch2}
 
             del local_dict
             if self.device == "cuda":
                 torch.cuda.empty_cache()
 
+    def sample_ambient_noise(self, data_list):
+
+        for fd in data_list:
+
+            meta = read_data(fd, self.data_path, self.data_format, mode=self.mode)  # (nch, nt)
+            data = torch.tensor(meta["data"]).to(self.device).unsqueeze(0)  # (1, nch, nt)
+
+            ## Convert to transforms
+            ##########################################################
+            data = torch.gradient(data, dim=-1)[0]
+
+            fs = 25
+            data = data[:, :, ::2]
+
+            data -= data.mean(dim=-1, keepdim=True)
+            data = data - torch.median(data, dim=-2, keepdim=True)[0]
+
+            window = int(2 * fs)
+
+            data_ = F.pad(data, (window // 2, window // 2), mode="circular")
+            moving_mean = F.avg_pool1d(data_, kernel_size=window, stride=1)[..., : data.shape[-1]]
+            data -= moving_mean
+
+            data_ = F.pad(data, (window // 2, window // 2), mode="circular")
+            # moving_abs = F.avg_pool1d(torch.abs(data_), kernel_size=window, stride=1)[..., : data.shape[-1]]
+            # data /= moving_abs
+            moving_std = F.lp_pool1d(data_, norm_type=2, kernel_size=window, stride=1)[..., : data.shape[-1]] / (
+                window**0.5
+            )
+            data /= moving_std
+
+            # f1, f2 = 0.1, 10
+            # passband = [f1 * 2 / fs, f2 * 2 / fs]
+            # b, a = scipy.signal.butter(2, passband, "bandpass")
+            # a = torch.tensor(a, dtype=data.dtype).to(self.device)
+            # b = torch.tensor(b, dtype=data.dtype).to(self.device)
+            # data = torchaudio.functional.filtfilt(data, a_coeffs=a, b_coeffs=b)
+            ##########################################################
+
+            if self.transforms is not None:
+                data = self.transforms(data)
+
+            nbt, nch, nt = data.shape
+            num = 0
+            index_i, index_j = [], []
+            for i in range(nch):
+                for j in range(i + 1, nch):
+                    index_i.append(i)
+                    index_j.append(j)
+                    num += 1
+                    if num == self.batch_size:
+                        yield {"data": data[:, index_i, :], "info": {"index": index_i},}, {
+                            "data": data[:, index_j, :],
+                            "info": {"index": index_j},
+                        }
+                        num = 0
+                        index_i, index_j = [], []
+
+            if num > 0:
+                yield {"data": data[:, index_i, :], "info": {"index": index_i},}, {
+                    "data": data[:, index_j, :],
+                    "info": {"index": index_j},
+                }
+
     def __len__(self):
+
         worker_info = torch.utils.data.get_worker_info()
         if worker_info is None:
             num_workers = 1
@@ -237,19 +297,35 @@ class CCIterableDataset(IterableDataset):
             worker_id = worker_info.id
 
         num_samples = 0
-        for i, j in self.block_index[worker_id::num_workers]:
-            event1, event2 = self.group1[i], self.group2[j]
-            num = 0
-            for ii in range(len(event1)):
-                for jj in range(len(event2)):
-                    if (event1[ii], event2[jj]) not in self.pair_list:
-                        continue
-                    num += 1
-                    if num == self.batch_size:
-                        num = 0
-                        num_samples += 1
-            if num > 0:
-                num_samples += 1
+
+        if self.mode == "AM":
+            meta = read_data(self.data_list1[0], self.data_path, self.data_format, mode=self.mode)
+            nch, nt = meta["data"].shape
+            for fd in self.data_list1[worker_id::num_workers]:
+                num = 0
+                for i in range(nch):
+                    for j in range(i + 1, nch):
+                        num += 1
+                        if num == self.batch_size:
+                            num = 0
+                            num_samples += 1
+                if num > 0:
+                    num_samples += 1
+
+        else:
+            for i, j in self.block_index[worker_id::num_workers]:
+                event1, event2 = self.group1[i], self.group2[j]
+                num = 0
+                for ii in range(len(event1)):
+                    for jj in range(len(event2)):
+                        if (event1[ii], event2[jj]) not in self.pair_list:
+                            continue
+                        num += 1
+                        if num == self.batch_size:
+                            num = 0
+                            num_samples += 1
+                if num > 0:
+                    num_samples += 1
 
         return num_samples
 
@@ -300,12 +376,27 @@ def generate_block_index(group1, group2, pair_list, min_sample_per_block=1):
     return num_empty_index
 
 
-def read_data(event, data_path, format="h5"):
-    if format == "h5":
+def read_data(file_name, data_path, format="h5", mode="CC"):
+
+    if (format == "h5") and (mode == "CC"):
         data_list, info_list = read_das_eventphase_data_h5(
-            data_path / f"{event}.h5", phase="P", event=True, dataset_keys=["shift_index"]
+            data_path / file_name, phase="P", event=True, dataset_keys=["shift_index"]
         )
+
+    if (format == "h5") and (mode == "AM"):
+        data_list, info_list = read_das_continuous_data_h5(data_path / file_name, dataset_keys=[])
+
+    ## TOOD: why do we need to read a list but return the first one
     return {"data": data_list[0], "info": info_list[0]}
+
+
+def read_das_continuous_data_h5(fn, dataset_keys=[]):
+    with h5py.File(fn, "r") as f:
+        data = f["Data"][:]
+        info = {}
+        for key in dataset_keys:
+            info[key] = f[key][:]
+    return [data], [info]
 
 
 # helper reading functions

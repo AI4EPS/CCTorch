@@ -5,6 +5,8 @@ from multiprocessing import Manager
 from pathlib import Path
 
 import h5py
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -16,15 +18,11 @@ from cctorch import (
     CCDataset,
     CCIterableDataset,
     CCModel,
-    data,
     fft_real_normalize,
     interp_time_cubic_spline,
     normalize,
-    reduce_ccmat,
     taper_time,
-    write_xcor_data_to_h5,
-    write_xcor_mccc_pick_to_csv,
-    write_xcor_to_ccmat,
+    write_results,
 )
 
 
@@ -40,9 +38,11 @@ def get_args_parser(add_help=True):
     parser.add_argument("--block-num1", default=1, type=int, help="Number of blocks for the 1st data pair dimension")
     parser.add_argument("--block-num2", default=1, type=int, help="Number of blocks for the 2nd data pair dimension")
     parser.add_argument("--auto-xcorr", action="store_true", help="do auto-correlation for data list")
+    parser.add_argument("--result-path", default="./result", type=str, help="result path")
 
     # xcor parameters
     parser.add_argument("--domain", default="time", type=str, help="time domain or frequency domain")
+    parser.add_argument("--dt", default=0.01, type=float, help="time sampling interval")
     parser.add_argument("--maxlag", default=0.5, type=float, help="maximum time lag during cross-correlation")
     parser.add_argument("--taper", action="store_true", help="taper two data window")
     parser.add_argument("--interp", action="store_true", help="interpolate the data window along time axs")
@@ -79,6 +79,7 @@ def get_args_parser(add_help=True):
         help="mode for tasks of CC (cross-correlation), TM (template matching), and AM (ambient noise)",
     )
     parser.add_argument("--batch-size", default=64, type=int, help="batch size")
+    parser.add_argument("--buffer-size", default=1e4, type=int, help="buffer size for writing to h5 file")
     parser.add_argument("--workers", default=0, type=int, help="data loading workers")
     parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu, Default: cuda)")
 
@@ -97,26 +98,62 @@ def main(args):
     world_size = utils.get_world_size() if args.distributed else 1
     device = torch.device(args.device)
 
-    if args.path_xcor_data:
-        path_xcor_data = f"{args.path_xcor_data}_{args.channel_shift}"
-        utils.mkdir(path_xcor_data)
-    if args.path_xcor_pick:
-        path_xcor_pick = f"{args.path_xcor_pick}_{args.channel_shift}"
-        utils.mkdir(path_xcor_pick)
+    @dataclass
+    class CCConfig:
+        ### dataset
+        mode = args.mode
+        auto_xcorr = args.auto_xcorr
 
-    transform_list = []
-    if args.taper:
-        transform_list.append(T.Lambda(taper_time))
-    if args.interp:
-        transform_list.append(T.Lambda(interp_time_cubic_spline))
-    if args.domain == "time":
-        transform_list.append(T.Lambda(normalize))
-    elif args.domain == "frequency":
-        transform_list.append(T.Lambda(fft_real_normalize))
-    transform = T.Compose(transform_list)
+        ### ccmodel
+        dt = args.dt
+        maxlag = args.maxlag
+        nlag = int(maxlag / dt)
+        print(nlag)
+        nma = (20, 0)
+        reduce_t = args.reduce_t
+        reduce_x = args.reduce_x
+        channel_shift = args.channel_shift
+        mccc = args.mccc
+        use_pair_index = True if args.dataset_type == "map" else False
+        domain = args.domain
+
+    ccconfig = CCConfig()
+
+    utils.mkdir(args.result_path)
+
+    preprocess = []
+    if args.mode == "CC":
+        if args.taper:
+            preprocess.append(T.Lambda(taper_time))
+        if args.interp:
+            preprocess.append(T.Lambda(interp_time_cubic_spline))
+        if args.domain == "time":
+            preprocess.append(T.Lambda(normalize))
+        elif args.domain == "frequency":
+            preprocess.append(T.Lambda(fft_real_normalize))
+    elif args.mode == "TM":
+        ## TODO add preprocess for template matching
+        pass
+    elif args.mode == "AM":
+        ## TODO add preprocess for ambient noise
+        pass
+    preprocess = T.Compose(preprocess)
+
+    postprocess = []
+    if args.mode == "CC":
+        ## TODO add preprocess for cross-correlation
+        pass
+    elif args.mode == "TM":
+        ## TODO add preprocess for template matching
+        pass
+    elif args.mode == "AM":
+        ## TODO add preprocess for ambient noise
+        pass
+    postprocess = T.Compose(postprocess)
 
     if args.dataset_type == "map":
         dataset = CCDataset(
+            config=ccconfig,
             pair_list=args.pair_list,
             data_list1=args.data_list1,
             data_list2=args.data_list2,
@@ -125,12 +162,13 @@ def main(args):
             block_num2=args.block_num2,
             data_path=args.data_path,
             device="cpu" if args.workers > 0 else args.device,
-            transform=transform,
+            transforms=preprocess,
             rank=rank,
             world_size=world_size,
         )
     elif args.dataset_type == "iterable":
         dataset = CCIterableDataset(
+            config=ccconfig,
             pair_list=args.pair_list,
             data_list1=args.data_list1,
             data_list2=args.data_list2,
@@ -139,15 +177,13 @@ def main(args):
             block_num2=args.block_num2,
             data_path=args.data_path,
             device=args.device,
-            transform=transform,
+            transforms=preprocess,
             batch_size=args.batch_size,
             rank=rank,
             world_size=world_size,
         )
     else:
         raise ValueError(f"dataset_type {args.dataset_type} not supported")
-
-    print(f"{len(dataset) = }")
     if len(dataset) < world_size:
         raise ValueError(f"dataset size {len(dataset)} is smaller than world size {world_size}")
 
@@ -164,113 +200,27 @@ def main(args):
         pin_memory=False,
     )
 
-    @dataclass
-    class CCConfig:
-        dt = 0.001
-        maxlag = args.maxlag
-        nma = (20, 0)
-        reduce_t = args.reduce_t
-        reduce_x = args.reduce_x
-        channel_shift = args.channel_shift
-        mccc = args.mccc
-        use_pair_index = True if args.dataset_type == "map" else False
-        domain = args.domain
-
     ccmodel = CCModel(
-        config=CCConfig(),
+        config=ccconfig,
         batch_size=args.batch_size,  ## only useful for dataset_type == map
         to_device=False,  ## to_device is done in dataset in default
         device=args.device,
+        transforms=postprocess,
     )
     ccmodel.to(args.device)
 
-    metric_logger = utils.MetricLogger(delimiter="  ")
-
     results = []
-    buffer_size = 1000
-
-    for x in metric_logger.log_every(dataloader, 100, ""):
-        result = ccmodel(x)
+    num = 0
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    for data in metric_logger.log_every(dataloader, 100, ""):
+        result = ccmodel(data)
         results.append(result)
-
-        if len(results) > buffer_size:
-            ## TODO: save results
-            # write_results(results, args)
-            pass
+        num += 1
+        if num % args.buffer_size == 0:
+            write_results(results, args.result_path, ccconfig)
             results = []
-
-    ## TODO: cleanup writting
-
-    # if args.path_xcor_matrix:
-    #     cc_matrix = torch.zeros([len(dataset.data_list1), len(dataset.data_list2)], device=args.device)
-    #     id_row = torch.tensor(dataset.data_list1, device=args.device)
-    #     id_col = torch.tensor(dataset.data_list2, device=args.device)
-
-    # if args.path_dasinfo:
-    #     channel_index = pd.read_csv(args.path_dasinfo)["index"]
-    # else:
-    #     channel_index = None
-
-    # writing_processes = []
-    # ctx = mp.get_context("spawn")
-    # ncpu = mp.cpu_count()
-    # for x in metric_logger.log_every(dataloader, 1, "CC: "):
-    #     result = ccmodel(x)
-
-    #     if args.path_xcor_data:
-    #         # write_xcor_data_to_h5(result, path_xcor_data, phase1=args.phase_type1, phase2=args.phase_type1)
-    #         for k in result:
-    #             result[k] = result[k].cpu()
-    #         p = ctx.Process(
-    #             target=write_xcor_data_to_h5,
-    #             args=(
-    #                 result,
-    #                 path_xcor_data,
-    #             ),
-    #             kwargs={"phase1": args.phase_type1, "phase2": args.phase_type1},
-    #         )
-    #         p.start()
-    #         writing_processes.append(p)
-    #     if args.path_xcor_pick and args.mccc:
-    #         # write_xcor_mccc_pick_to_csv(result, x, path_xcor_pick, channel_index=channel_index)
-    #         p = ctx.Process(target=write_xcor_mccc_pick_to_csv, args=(result, x, path_xcor_pick, channel_index))
-    #         p.start()
-    #         writing_processes.append(p)
-    #     if args.path_xcor_matrix:
-    #         # write_xcor_to_ccmat(result, cc_matrix, id_row, id_col)
-    #         p = ctx.Process(target=write_xcor_mccc_pick_to_csv, args=(result, x, path_xcor_pick, channel_index))
-    #         p.start()
-    #         writing_processes.append(p)
-
-    #     ## prevent too many processes
-    #     if len(writing_processes) > ncpu:
-    #         for p in writing_processes:
-    #             p.join()
-    #         writing_processes = []
-
-    #     ## TODO: ADD post-processing
-    #     ## TODO: Add visualization
-
-    # logging.info("Waiting for writing processes to finish...")
-    # for p in writing_processes:
-    #     p.join()
-    #     logging.info("Finish writing outputs.")
-
-    # if args.path_xcor_matrix:
-    #     import numpy as np
-
-    #     cc_matrix = cc_matrix.cpu().numpy()
-    #     np.savez(
-    #         f"{args.path_xcor_matrix}_{args.channel_shift}_{rank}.npz",
-    #         cc=cc_matrix,
-    #         id_row=dataset.data_list1,
-    #         id_col=dataset.data_list2,
-    #         id_pair=list(dataset.pairs),
-    #     )
-
-    #     torch.distributed.barrier()
-    #     if rank == 0:
-    #         reduce_ccmat(args.path_xcor_matrix, args.channel_shift, world_size)
+    if num > 0:
+        write_results(results, args.result_path, ccconfig)
 
 
 if __name__ == "__main__":
