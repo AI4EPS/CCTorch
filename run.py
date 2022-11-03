@@ -34,11 +34,11 @@ def get_args_parser(add_help=True):
     parser.add_argument("--data-list1", default=None, type=str, help="data list 1")
     parser.add_argument("--data-list2", default=None, type=str, help="data list 1")
     parser.add_argument("--data-path", default="./", type=str, help="data path")
+    parser.add_argument("--result-path", default="./result", type=str, help="result path")
     parser.add_argument("--dataset-type", default="iterable", type=str, help="data loader type in {map, iterable}")
     parser.add_argument("--block-num1", default=1, type=int, help="Number of blocks for the 1st data pair dimension")
     parser.add_argument("--block-num2", default=1, type=int, help="Number of blocks for the 2nd data pair dimension")
     parser.add_argument("--auto-xcorr", action="store_true", help="do auto-correlation for data list")
-    parser.add_argument("--result-path", default="./result", type=str, help="result path")
 
     # xcor parameters
     parser.add_argument("--domain", default="time", type=str, help="time domain or frequency domain")
@@ -108,7 +108,6 @@ def main(args):
         dt = args.dt
         maxlag = args.maxlag
         nlag = int(maxlag / dt)
-        print(nlag)
         nma = (20, 0)
         reduce_t = args.reduce_t
         reduce_x = args.reduce_x
@@ -157,7 +156,6 @@ def main(args):
             pair_list=args.pair_list,
             data_list1=args.data_list1,
             data_list2=args.data_list2,
-            auto_xcorr=args.auto_xcorr,
             block_num1=args.block_num1,
             block_num2=args.block_num2,
             data_path=args.data_path,
@@ -172,7 +170,6 @@ def main(args):
             pair_list=args.pair_list,
             data_list1=args.data_list1,
             data_list2=args.data_list2,
-            auto_xcorr=args.auto_xcorr,
             block_num1=args.block_num1,
             block_num2=args.block_num2,
             data_path=args.data_path,
