@@ -36,7 +36,7 @@ def write_ambient_noise(results, result_path, ccconfig, dim=1, rank=0, world_siz
                 if pair_index in fp:
                     data = fp[pair_index][:]
                     count = fp[pair_index].attrs["count"]
-                    data = (data * count + xcorr) / (count + 1)
+                    data = count / (count + 1) * data + np.nan_to_num(xcorr) / (count + 1)
                     fp[pair_index][:] = data
                     fp[pair_index].attrs["count"] = count + 1
                 else:

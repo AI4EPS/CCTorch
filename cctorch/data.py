@@ -140,6 +140,8 @@ class CCIterableDataset(IterableDataset):
         self.group1 = [list(x) for x in np.array_split(self.data_list1, block_num1) if len(x) > 0]
         self.group2 = [list(x) for x in np.array_split(self.data_list2, block_num2) if len(x) > 0]
         self.block_index = generate_block_index(self.group1, self.group2, self.pair_list)[rank::world_size]
+        if self.mode == "AM":
+            self.data_list1 = self.data_list1[rank::world_size]
         self.data_path = Path(data_path)
         self.data_format = data_format
         self.transforms = transforms
@@ -240,7 +242,10 @@ class CCIterableDataset(IterableDataset):
             data = data - torch.median(data, dim=-2, keepdim=True)[0]
 
             window = int(2 * fs)
+            if data.shape[2] < window:
+                continue
 
+            data /= data.mean()  ## prevent overflow
             data_ = F.pad(data, (window // 2, window // 2), mode="circular")
             moving_mean = F.avg_pool1d(data_, kernel_size=window, stride=1)[..., : data.shape[-1]]
             data -= moving_mean
@@ -267,23 +272,42 @@ class CCIterableDataset(IterableDataset):
             nbt, nch, nt = data.shape
             num = 0
             index_i, index_j = [], []
+
+            if self.config.fixed_channels is not None:
+                j_index = (
+                    self.config.fixed_channels
+                    if isinstance(self.config.fixed_channels, list)
+                    else [self.fixed_channels]
+                )
+
             for i in range(nch):
-                for j in range(i + 1, nch):
+                # for j in range(i + 1, nch):
+                if self.config.fixed_channels is None:
+                    if self.config.max_channel is not None:
+                        j_index = range(
+                            i + self.config.min_channel,
+                            min(i + self.config.max_channel + 1, nch),
+                            self.config.delta_channel,
+                        )
+                    else:
+                        j_index = range(i + self.config.min_channel, nch, self.config.delta_channel)
+
+                for j in j_index:
                     index_i.append(i)
                     index_j.append(j)
                     num += 1
                     if num == self.batch_size:
-                        yield {"data": data[:, index_i, :], "info": {"index": index_i},}, {
-                            "data": data[:, index_j, :],
-                            "info": {"index": index_j},
+                        yield {"data": data[:, index_j, :], "info": {"index": index_j},}, {
+                            "data": data[:, index_i, :],
+                            "info": {"index": index_i},
                         }
                         num = 0
                         index_i, index_j = [], []
 
             if num > 0:
-                yield {"data": data[:, index_i, :], "info": {"index": index_i},}, {
-                    "data": data[:, index_j, :],
-                    "info": {"index": index_j},
+                yield {"data": data[:, index_j, :], "info": {"index": index_j},}, {
+                    "data": data[:, index_i, :],
+                    "info": {"index": index_i},
                 }
 
     def __len__(self):
@@ -296,36 +320,60 @@ class CCIterableDataset(IterableDataset):
             num_workers = worker_info.num_workers
             worker_id = worker_info.id
 
-        num_samples = 0
-
         if self.mode == "AM":
-            meta = read_data(self.data_list1[0], self.data_path, self.data_format, mode=self.mode)
-            nch, nt = meta["data"].shape
-            for fd in self.data_list1[worker_id::num_workers]:
-                num = 0
-                for i in range(nch):
-                    for j in range(i + 1, nch):
-                        num += 1
-                        if num == self.batch_size:
-                            num = 0
-                            num_samples += 1
-                if num > 0:
-                    num_samples += 1
-
+            num_samples = self.count_sample_ambient_noise(num_workers, worker_id)
         else:
-            for i, j in self.block_index[worker_id::num_workers]:
-                event1, event2 = self.group1[i], self.group2[j]
-                num = 0
-                for ii in range(len(event1)):
-                    for jj in range(len(event2)):
-                        if (event1[ii], event2[jj]) not in self.pair_list:
-                            continue
-                        num += 1
-                        if num == self.batch_size:
-                            num = 0
-                            num_samples += 1
-                if num > 0:
-                    num_samples += 1
+            num_samples = self.count_sample(num_workers, worker_id)
+
+        return num_samples
+
+    def count_sample(self, num_workers, worker_id):
+        num_samples = 0
+        for i, j in self.block_index[worker_id::num_workers]:
+            event1, event2 = self.group1[i], self.group2[j]
+            num = 0
+            for ii in range(len(event1)):
+                for jj in range(len(event2)):
+                    if (event1[ii], event2[jj]) not in self.pair_list:
+                        continue
+                    num += 1
+                    if num == self.batch_size:
+                        num = 0
+                        num_samples += 1
+            if num > 0:
+                num_samples += 1
+        return num_samples
+
+    def count_sample_ambient_noise(self, num_workers, worker_id):
+        num_samples = 0
+        meta = read_data(self.data_list1[0], self.data_path, self.data_format, mode=self.mode)
+        nch, nt = meta["data"].shape
+        for fd in self.data_list1[worker_id::num_workers]:
+            num = 0
+            if self.config.fixed_channels is not None:
+                j_index = (
+                    self.config.fixed_channels
+                    if isinstance(self.config.fixed_channels, list)
+                    else [self.fixed_channels]
+                )
+            for i in range(nch):
+                # for j in range(i + 1, nch):
+                if self.config.fixed_channels is None:
+                    if self.config.max_channel is not None:
+                        j_index = range(
+                            i + self.config.min_channel,
+                            min(i + self.config.max_channel + 1, nch),
+                            self.config.delta_channel,
+                        )
+                    else:
+                        j_index = range(i + self.config.min_channel, nch, self.config.delta_channel)
+                for j in j_index:
+                    num += 1
+                    if num == self.batch_size:
+                        num = 0
+                        num_samples += 1
+            if num > 0:
+                num_samples += 1
 
         return num_samples
 

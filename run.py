@@ -34,11 +34,23 @@ def get_args_parser(add_help=True):
     parser.add_argument("--data-list1", default=None, type=str, help="data list 1")
     parser.add_argument("--data-list2", default=None, type=str, help="data list 1")
     parser.add_argument("--data-path", default="./", type=str, help="data path")
-    parser.add_argument("--result-path", default="./result", type=str, help="result path")
+    parser.add_argument("--result-path", default="./results", type=str, help="results path")
     parser.add_argument("--dataset-type", default="iterable", type=str, help="data loader type in {map, iterable}")
     parser.add_argument("--block-num1", default=1, type=int, help="Number of blocks for the 1st data pair dimension")
     parser.add_argument("--block-num2", default=1, type=int, help="Number of blocks for the 2nd data pair dimension")
     parser.add_argument("--auto-xcorr", action="store_true", help="do auto-correlation for data list")
+
+    ## ambinet parameters
+    parser.add_argument("--min-channel", default=1, type=int, help="minimum channel index")
+    parser.add_argument("--max-channel", default=None, type=int, help="maximum channel index")
+    parser.add_argument("--delta-channel", default=1, type=int, help="channel interval")
+    parser.add_argument(
+        "--fixed-channels",
+        nargs="+",
+        default=None,
+        type=int,
+        help="fixed channel index, if specified, min and max are ignored",
+    )
 
     # xcor parameters
     parser.add_argument("--domain", default="time", type=str, help="time domain or frequency domain")
@@ -79,7 +91,7 @@ def get_args_parser(add_help=True):
         help="mode for tasks of CC (cross-correlation), TM (template matching), and AM (ambient noise)",
     )
     parser.add_argument("--batch-size", default=64, type=int, help="batch size")
-    parser.add_argument("--buffer-size", default=1e4, type=int, help="buffer size for writing to h5 file")
+    parser.add_argument("--buffer-size", default=10, type=int, help="buffer size for writing to h5 file")
     parser.add_argument("--workers", default=0, type=int, help="data loading workers")
     parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu, Default: cuda)")
 
@@ -103,6 +115,10 @@ def main(args):
         ### dataset
         mode = args.mode
         auto_xcorr = args.auto_xcorr
+        max_channel = args.max_channel
+        min_channel = args.min_channel
+        fixed_channels = args.fixed_channels
+        delta_channel = args.delta_channel
 
         ### ccmodel
         dt = args.dt
@@ -181,8 +197,8 @@ def main(args):
         )
     else:
         raise ValueError(f"dataset_type {args.dataset_type} not supported")
-    if len(dataset) < world_size:
-        raise ValueError(f"dataset size {len(dataset)} is smaller than world size {world_size}")
+    # if len(dataset) < world_size:
+    #     raise ValueError(f"dataset size {len(dataset)} is smaller than world size {world_size}")
 
     if args.distributed:
         sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=False)
@@ -209,15 +225,15 @@ def main(args):
     results = []
     num = 0
     metric_logger = utils.MetricLogger(delimiter="  ")
-    for data in metric_logger.log_every(dataloader, 100, ""):
+    for data in metric_logger.log_every(dataloader, 10, ""):
         result = ccmodel(data)
         results.append(result)
         num += 1
         if num % args.buffer_size == 0:
-            write_results(results, args.result_path, ccconfig)
+            write_results(results, args.result_path, ccconfig, rank=rank, world_size=world_size)
             results = []
     if num > 0:
-        write_results(results, args.result_path, ccconfig)
+        write_results(results, args.result_path, ccconfig, rank=rank, world_size=world_size)
 
 
 if __name__ == "__main__":
