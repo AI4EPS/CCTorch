@@ -421,3 +421,113 @@ def mccc(data, dt, cc_threshold, damp=1, mccc_maxlag=0.04, win_threshold=None, c
     solution.append(d)
     return solution
 
+def detrend_tensor(data, axis=-1, type='linear', bp=0, overwrite_data=False):
+    """
+    Remove linear trend along axis from data.
+    Parameters
+    ----------
+    data : tensor_like (pytorch)
+        The input data.
+    axis : int, optional
+        The axis along which to detrend the data. By default this is the
+        last axis (-1).
+    type : {'linear', 'constant'}, optional
+        The type of detrending. If ``type == 'linear'`` (default),
+        the result of a linear least-squares fit to `data` is subtracted
+        from `data`.
+        If ``type == 'constant'``, only the mean of `data` is subtracted.
+    bp : array_like of ints, optional
+        A sequence of break points. If given, an individual linear fit is
+        performed for each part of `data` between two break points.
+        Break points are specified as indices into `data`. This parameter
+        only has an effect when ``type == 'linear'``.
+    overwrite_data : bool, optional
+        If True, perform in place detrending and avoid a copy. Default is False
+    Returns
+    -------
+    ret : ndarray
+        The detrended input data.
+    References
+    -------
+    https://github.com/scipy/scipy/blob/v1.9.3/scipy/signal/_signaltools.py#L3427-L3511
+    Edit histories
+    -------
+    Nov 01, 2022 - Created by Qiushi Zhai (Caltech)
+    Examples
+    --------
+    Example from scipy.signal.detrend:
+    >>> from scipy import signal
+    >>> from numpy.random import default_rng
+    >>> rng = default_rng()
+    >>> npoints = 1000
+    >>> noise = rng.standard_normal(npoints)
+    >>> x = 3 + 2*np.linspace(0, 1, npoints) + noise
+    >>> (signal.detrend(x) - noise).max()
+    0.06  # random
+    Example of this function (detrend_tensor):
+    >>> import numpy as np
+    >>> import torch
+    >>> from scipy.signal import detrend
+    >>> data=np.arange(15).reshape(3, 5)*1.0
+    >>> data[0,2]=10
+    >>> data_t=torch.from_numpy(data).to(torch.float32).to('cuda')
+    >>> print(data_t)
+    >>> print(detrend_tensor(data_t,axis=-1,type='linear',).to('cpu').numpy())
+    >>> print(np.sum(np.abs(detrend_tensor(data_t,axis=-1).to('cpu').numpy()-detrend(data,type='l',axis=-1)))/np.sum(np.abs(detrend(data,type='l',axis=-1))))
+    """
+    device = data.device
+    if type not in ['linear', 'l', 'constant', 'c']:
+        raise ValueError("Trend type must be 'linear' or 'constant'.")
+    data = torch.as_tensor(data).to(torch.float32)
+    dtype = data.dtype
+    if type in ['constant', 'c']:
+        ret = data - torch.mean(data, axis, keepdims=True)
+        return ret
+    else:
+        dshape = data.shape
+        N = dshape[axis]
+        bp = torch.sort(torch.unique(torch.tensor([0, bp, N])))[0]
+        if torch.any(bp > N):
+            raise ValueError(
+                "Breakpoints must be less than length " "of data along given axis."
+            )
+        Nreg = len(bp) - 1
+
+        # Restructure data so that axis is along first dimension and
+        #  all other dimensions are collapsed into second dimension
+        rnk = len(dshape)
+        if axis < 0:
+            axis = axis + rnk
+        if rnk >= 2:
+            newdims = torch.tensor(np.r_[axis, 1:axis, 0, axis + 1 : rnk])
+            newdata = torch.reshape(
+                torch.transpose(data, 0, axis), (N, prod(dshape) // N)
+            )
+        else:
+            newdata = torch.reshape(data, (N, prod(dshape) // N))
+        if not overwrite_data:
+            newdata = torch.clone(newdata)  # make sure we have a copy
+
+        # Find leastsq fit and remove it for each piece
+        for m in range(Nreg):
+            Npts = bp[m + 1] - bp[m]
+            A = torch.ones(Npts, 2, dtype=dtype, device=device)
+            A[:, 0] = (torch.arange(1, Npts + 1) * 1.0 / Npts).type(dtype).to(device)
+            sl = slice(bp[m], bp[m + 1])
+            coef, resids, rank, s = torch.linalg.lstsq(A, newdata[sl])
+            newdata[sl] = newdata[sl] - torch.matmul(A, coef)
+
+        # Put data back in original shape.
+        if rnk >= 2:
+            tdshape = [
+                int(i)
+                for i in torch.index_select(
+                    torch.Tensor(list(dshape)), 0, newdims
+                ).tolist()
+            ]
+            ret = torch.reshape(newdata, tuple((tdshape)))
+            ret = torch.transpose(ret, 0, axis)
+        else:
+            ret = newdata
+        return ret
+    
