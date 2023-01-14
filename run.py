@@ -8,6 +8,7 @@ import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import functools
 import torch
 import torch.nn as nn
 import torchvision.transforms as T
@@ -17,13 +18,9 @@ import utils
 from cctorch import (
     CCDataset,
     CCIterableDataset,
-    CCModel,
-    fft_real_normalize,
-    interp_time_cubic_spline,
-    normalize,
-    taper_time,
-    write_results,
-)
+    CCModel,)
+from cctorch.transforms import *
+from cctorch.utils import write_results
 
 
 def get_args_parser(add_help=True):
@@ -40,10 +37,12 @@ def get_args_parser(add_help=True):
     parser.add_argument("--block-num2", default=1, type=int, help="Number of blocks for the 2nd data pair dimension")
     parser.add_argument("--auto-xcorr", action="store_true", help="do auto-correlation for data list")
 
-    ## ambinet parameters
-    parser.add_argument("--min-channel", default=1, type=int, help="minimum channel index")
+    ## ambient noise parameters
+    parser.add_argument("--min-channel", default=0, type=int, help="minimum channel index")
     parser.add_argument("--max-channel", default=None, type=int, help="maximum channel index")
     parser.add_argument("--delta-channel", default=1, type=int, help="channel interval")
+    parser.add_argument("--left-end-channel", default=None, type=int, help="channel index of the left end from the source")
+    parser.add_argument("--right-end-channel", default=None, type=int, help="channel index of the right end from the source")
     parser.add_argument(
         "--fixed-channels",
         nargs="+",
@@ -99,6 +98,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--world-size", default=1, type=int, help="number of distributed processes")
     parser.add_argument("--dist-url", default="env://", type=str, help="url used to set up distributed training")
 
+    parser.add_argument("--log-interval", default=10, type=int, help="log every n iterations")
     return parser
 
 
@@ -115,10 +115,18 @@ def main(args):
         ### dataset
         mode = args.mode
         auto_xcorr = args.auto_xcorr
+
+        ### ambinet noise
         max_channel = args.max_channel
         min_channel = args.min_channel
-        fixed_channels = args.fixed_channels
         delta_channel = args.delta_channel
+        left_end_channel = args.left_end_channel
+        right_end_channel = args.right_end_channel
+        fixed_channels = args.fixed_channels
+        #### preprocessing for ambient noise
+        transforms_on_file = True
+        transforms_on_batch = False
+        window_size = 40
 
         ### ccmodel
         dt = args.dt
@@ -151,7 +159,8 @@ def main(args):
         pass
     elif args.mode == "AM":
         ## TODO add preprocess for ambient noise
-        pass
+        preprocess.append(T.Lambda(remove_median))
+        preprocess.append(T.Lambda(functools.partial(moving_normalization, window_size=ccconfig.window_size)))
     preprocess = T.Compose(preprocess)
 
     postprocess = []
@@ -180,7 +189,7 @@ def main(args):
             rank=rank,
             world_size=world_size,
         )
-    elif args.dataset_type == "iterable":
+    elif args.dataset_type == "iterable": ## prefered
         dataset = CCIterableDataset(
             config=ccconfig,
             pair_list=args.pair_list,
@@ -225,7 +234,7 @@ def main(args):
     results = []
     num = 0
     metric_logger = utils.MetricLogger(delimiter="  ")
-    for data in metric_logger.log_every(dataloader, 10, ""):
+    for data in metric_logger.log_every(dataloader, args.log_interval, ""):
         result = ccmodel(data)
         results.append(result)
         num += 1

@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 import torchaudio
 from torch.utils.data import Dataset, IterableDataset
+import itertools
 
 
 class CCDataset(Dataset):
@@ -28,7 +29,7 @@ class CCDataset(Dataset):
         **kwargs,
     ):
         super(CCDataset).__init__()
-        ## TODO: extract this part into a function; keep this temporary until TM and AN are implemented
+        ## TODO: extract this part into a function; keep this temporary until TM and AM are implemented
         ## pair_list has the highest priority
         if pair_list is not None:
             self.pair_list, self.data_list1, self.data_list2 = read_pair_list(pair_list)
@@ -118,7 +119,7 @@ class CCIterableDataset(IterableDataset):
         **kwargs,
     ):
         super(CCIterableDataset).__init__()
-        ## TODO: extract this part into a function; keep this temporary until TM and AN are implemented
+        ## TODO: extract this part into a function; keep this temporary until TM and AM are implemented
         ## pair_list has the highest priority
         if pair_list is not None:
             self.pair_list, self.data_list1, self.data_list2 = read_pair_list(pair_list)
@@ -130,23 +131,26 @@ class CCIterableDataset(IterableDataset):
             elif pair_list is None:
                 self.data_list2 = self.data_list1
             ## generate pair_list if not provided
-            if pair_list is None:
+            if (pair_list is None) and (config.mode != "AM"):
                 self.pair_list = generate_pairs(self.data_list1, self.data_list2, config.auto_xcorr)
 
         self.mode = config.mode
         self.config = config
         self.block_num1 = block_num1
         self.block_num2 = block_num2
-        self.group1 = [list(x) for x in np.array_split(self.data_list1, block_num1) if len(x) > 0]
-        self.group2 = [list(x) for x in np.array_split(self.data_list2, block_num2) if len(x) > 0]
-        self.block_index = generate_block_index(self.group1, self.group2, self.pair_list)[rank::world_size]
-        if self.mode == "AM":
-            self.data_list1 = self.data_list1[rank::world_size]
         self.data_path = Path(data_path)
         self.data_format = data_format
         self.transforms = transforms
         self.batch_size = batch_size
         self.device = device
+
+        if self.mode == "AM":
+             ## For ambient noise, we split chunks in the sampling function
+            self.data_list1 = self.data_list1[rank::world_size]
+        else:
+            self.group1 = [list(x) for x in np.array_split(self.data_list1, block_num1) if len(x) > 0]
+            self.group2 = [list(x) for x in np.array_split(self.data_list2, block_num2) if len(x) > 0]
+            self.block_index = generate_block_index(self.group1, self.group2, self.pair_list)[rank::world_size]
 
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
@@ -169,46 +173,45 @@ class CCIterableDataset(IterableDataset):
             event1, event2 = self.group1[i], self.group2[j]
             data1, info1, data2, info2 = [], [], [], []
             num = 0
-            for ii in range(len(event1)):
-                for jj in range(len(event2)):
-                    if (event1[ii], event2[jj]) not in self.pair_list:
-                        continue
+            for (ii, jj) in itertools.product(range(len(event1)), range(len(event2))):
+                if (event1[ii], event2[jj]) not in self.pair_list:
+                    continue
 
-                    if event1[ii] not in local_dict:
-                        meta1 = read_data(event1[ii], self.data_path, self.data_format)
-                        data = torch.tensor(meta1["data"]).to(self.device).unsqueeze(0)  ## add batch dimension
-                        if self.transforms is not None:
-                            data = self.transforms(data)
-                        meta1["data"] = data
-                        local_dict[event1[ii]] = meta1
-                    else:
-                        meta1 = local_dict[event1[ii]]
+                if event1[ii] not in local_dict:
+                    meta1 = read_data(event1[ii], self.data_path, self.data_format)
+                    data = torch.tensor(meta1["data"]).to(self.device).unsqueeze(0)  ## add batch dimension
+                    if self.transforms is not None:
+                        data = self.transforms(data)
+                    meta1["data"] = data
+                    local_dict[event1[ii]] = meta1
+                else:
+                    meta1 = local_dict[event1[ii]]
 
-                    if event2[jj] not in local_dict:
-                        meta2 = read_data(event2[jj], self.data_path, self.data_format)
-                        data = torch.tensor(meta2["data"]).to(self.device).unsqueeze(0)  ## add batch dimension
-                        if self.transforms is not None:
-                            data = self.transforms(data)
-                        meta1["data"] = data
-                        local_dict[event2[jj]] = meta2
-                    else:
-                        meta2 = local_dict[event2[jj]]
+                if event2[jj] not in local_dict:
+                    meta2 = read_data(event2[jj], self.data_path, self.data_format)
+                    data = torch.tensor(meta2["data"]).to(self.device).unsqueeze(0)  ## add batch dimension
+                    if self.transforms is not None:
+                        data = self.transforms(data)
+                    meta1["data"] = data
+                    local_dict[event2[jj]] = meta2
+                else:
+                    meta2 = local_dict[event2[jj]]
 
-                    data1.append(meta1["data"])
-                    info1.append(meta1["info"])
-                    data2.append(meta2["data"])
-                    info2.append(meta2["info"])
+                data1.append(meta1["data"])
+                info1.append(meta1["info"])
+                data2.append(meta2["data"])
+                info2.append(meta2["info"])
 
-                    num += 1
-                    if num == self.batch_size:
-                        num = 0
-                        data_batch1 = torch.cat(data1, dim=0)
-                        data_batch2 = torch.cat(data2, dim=0)
-                        ## TODO: fix yield for batch size
-                        info_batch1 = None
-                        info_batch2 = None
-                        data1, info1, data2, info2 = [], [], [], []
-                        yield {"data": data_batch1, "info": info_batch1}, {"data": data_batch2, "info": info_batch2}
+                num += 1
+                if num == self.batch_size:
+                    num = 0
+                    data_batch1 = torch.cat(data1, dim=0)
+                    data_batch2 = torch.cat(data2, dim=0)
+                    ## TODO: fix yield for batch size
+                    info_batch1 = None
+                    info_batch2 = None
+                    data1, info1, data2, info2 = [], [], [], []
+                    yield {"data": data_batch1, "info": info_batch1}, {"data": data_batch2, "info": info_batch2}
 
             ## yield the last batch
             if num > 0:
@@ -220,95 +223,65 @@ class CCIterableDataset(IterableDataset):
                 data1, info1, data2, info2 = [], [], [], []
                 yield {"data": data_batch1, "info": info_batch1}, {"data": data_batch2, "info": info_batch2}
 
-            del local_dict
-            if self.device == "cuda":
-                torch.cuda.empty_cache()
+            # del local_dict
+            # if self.device == "cuda":
+            #     torch.cuda.empty_cache()
 
     def sample_ambient_noise(self, data_list):
 
         for fd in data_list:
 
             meta = read_data(fd, self.data_path, self.data_format, mode=self.mode)  # (nch, nt)
-            data = torch.tensor(meta["data"]).to(self.device).unsqueeze(0)  # (1, nch, nt)
-
-            ## Convert to transforms
-            ##########################################################
-            data = torch.gradient(data, dim=-1)[0]
-
-            fs = 25
-            data = data[:, :, ::2]
-
-            data -= data.mean(dim=-1, keepdim=True)
-            data = data - torch.median(data, dim=-2, keepdim=True)[0]
-
-            window = int(2 * fs)
-            if data.shape[2] < window:
-                continue
-
-            data /= data.mean()  ## prevent overflow
-            data_ = F.pad(data, (window // 2, window // 2), mode="circular")
-            moving_mean = F.avg_pool1d(data_, kernel_size=window, stride=1)[..., : data.shape[-1]]
-            data -= moving_mean
-
-            data_ = F.pad(data, (window // 2, window // 2), mode="circular")
-            # moving_abs = F.avg_pool1d(torch.abs(data_), kernel_size=window, stride=1)[..., : data.shape[-1]]
-            # data /= moving_abs
-            moving_std = F.lp_pool1d(data_, norm_type=2, kernel_size=window, stride=1)[..., : data.shape[-1]] / (
-                window**0.5
-            )
-            data /= moving_std
-
-            # f1, f2 = 0.1, 10
-            # passband = [f1 * 2 / fs, f2 * 2 / fs]
-            # b, a = scipy.signal.butter(2, passband, "bandpass")
-            # a = torch.tensor(a, dtype=data.dtype).to(self.device)
-            # b = torch.tensor(b, dtype=data.dtype).to(self.device)
-            # data = torchaudio.functional.filtfilt(data, a_coeffs=a, b_coeffs=b)
-            ##########################################################
-
-            if self.transforms is not None:
+            data = meta["data"].unsqueeze(0)  # (1, nch, nt)
+            
+            if (self.config.transforms_on_file) and (self.transforms is not None):
                 data = self.transforms(data)
 
-            nbt, nch, nt = data.shape
-            num = 0
-            index_i, index_j = [], []
+            nbatch, nch, nt = data.shape
+
+            ## cut blocks
+            min_channel = self.config.min_channel if self.config.min_channel is not None else 0
+            max_channel = self.config.max_channel if self.config.max_channel is not None else nch
+            left_end_channel = self.config.left_end_channel if self.config.left_end_channel is not None else -nch
+            right_end_channel = self.config.right_end_channel if self.config.right_end_channel is not None else nch
 
             if self.config.fixed_channels is not None:
-                j_index = (
+                ## only process channels passed by "--fixed-channels" as source
+                lists_1 = (
                     self.config.fixed_channels
                     if isinstance(self.config.fixed_channels, list)
                     else [self.fixed_channels]
                 )
+            else:
+                ## using delta_channel to down-sample channels needed for ambient noise
+                ## using min_channel and max_channel to selected channels that are within a range 
+                lists_1 = range(min_channel, max_channel, self.config.delta_channel)
+            lists_2 = range(min_channel, max_channel, self.config.delta_channel)
+            group_1 = [list(x) for x in np.array_split(lists_1, self.block_num1) if len(x) > 0]
+            group_2 = [list(x) for x in np.array_split(lists_2, self.block_num2) if len(x) > 0]
+            block_index = list(itertools.product(range(len(group_1)), range(len(group_2))))
+            
+            ## loop each block
+            for i, j in block_index:
+                block1 = group_1[i]
+                block2 = group_2[j]
+                index_i = []
+                index_j = []
+                for ii, jj in itertools.product(block1, block2):
+                    if (jj < (ii + left_end_channel)) or (jj > (ii + right_end_channel)):
+                        continue
+                    index_i.append(ii)
+                    index_j.append(jj)
 
-            for i in range(nch):
-                # for j in range(i + 1, nch):
-                if self.config.fixed_channels is None:
-                    if self.config.max_channel is not None:
-                        j_index = range(
-                            i + self.config.min_channel,
-                            min(i + self.config.max_channel + 1, nch),
-                            self.config.delta_channel,
-                        )
-                    else:
-                        j_index = range(i + self.config.min_channel, nch, self.config.delta_channel)
+                data_i = data[:, index_i, :].to(self.device)
+                data_j = data[:, index_j, :].to(self.device)
+                
+                if (self.config.transforms_on_batch) and (self.transforms is not None):
+                    data_i = self.transforms(data_i)
+                    data_j = self.transforms(data_j)
 
-                for j in j_index:
-                    index_i.append(i)
-                    index_j.append(j)
-                    num += 1
-                    if num == self.batch_size:
-                        yield {"data": data[:, index_j, :], "info": {"index": index_j},}, {
-                            "data": data[:, index_i, :],
-                            "info": {"index": index_i},
-                        }
-                        num = 0
-                        index_i, index_j = [], []
+                yield {"data": data_i, "info": {"index": index_i},},  {"data": data_j, "info": {"index": index_j}}
 
-            if num > 0:
-                yield {"data": data[:, index_j, :], "info": {"index": index_j},}, {
-                    "data": data[:, index_i, :],
-                    "info": {"index": index_i},
-                }
 
     def __len__(self):
 
@@ -346,33 +319,34 @@ class CCIterableDataset(IterableDataset):
 
     def count_sample_ambient_noise(self, num_workers, worker_id):
         num_samples = 0
-        meta = read_data(self.data_list1[0], self.data_path, self.data_format, mode=self.mode)
-        nch, nt = meta["data"].shape
-        for fd in self.data_list1[worker_id::num_workers]:
-            num = 0
+        for fd in self.data_list1:
+
+            nch, nt = get_shape_das_continous_data_h5(self.data_path / fd)  # (nch, nt)
+
+            ## cut blocks
+            min_channel = self.config.min_channel if self.config.min_channel is not None else 0
+            max_channel = self.config.max_channel if self.config.max_channel is not None else nch
+            left_end_channel = self.config.left_end_channel if self.config.left_end_channel is not None else -nch
+            right_end_channel = self.config.right_end_channel if self.config.right_end_channel is not None else nch
+
             if self.config.fixed_channels is not None:
-                j_index = (
+                ## only process channels passed by "--fixed-channels" as source
+                lists_1 = (
                     self.config.fixed_channels
                     if isinstance(self.config.fixed_channels, list)
                     else [self.fixed_channels]
                 )
-            for i in range(nch):
-                # for j in range(i + 1, nch):
-                if self.config.fixed_channels is None:
-                    if self.config.max_channel is not None:
-                        j_index = range(
-                            i + self.config.min_channel,
-                            min(i + self.config.max_channel + 1, nch),
-                            self.config.delta_channel,
-                        )
-                    else:
-                        j_index = range(i + self.config.min_channel, nch, self.config.delta_channel)
-                for j in j_index:
-                    num += 1
-                    if num == self.batch_size:
-                        num = 0
-                        num_samples += 1
-            if num > 0:
+            else:
+                ## using delta_channel to down-sample channels needed for ambient noise
+                ## using min_channel and max_channel to selected channels that are within a range 
+                lists_1 = range(min_channel, max_channel, self.config.delta_channel)
+            lists_2 = range(min_channel, max_channel, self.config.delta_channel)
+            group_1 = [list(x) for x in np.array_split(lists_1, self.block_num1) if len(x) > 0]
+            group_2 = [list(x) for x in np.array_split(lists_2, self.block_num2) if len(x) > 0]
+            block_index = list(itertools.product(range(len(group_1)), range(len(group_2))))
+            
+            ## loop each block
+            for i, j in block_index:
                 num_samples += 1
 
         return num_samples
@@ -430,12 +404,14 @@ def read_data(file_name, data_path, format="h5", mode="CC"):
         data_list, info_list = read_das_eventphase_data_h5(
             data_path / file_name, phase="P", event=True, dataset_keys=["shift_index"]
         )
+        ## TODO: check with Jiaxuan; why do we need to read a list but return the first one
+        data = data_list[0]
+        info = info_list[0]
 
     if (format == "h5") and (mode == "AM"):
-        data_list, info_list = read_das_continuous_data_h5(data_path / file_name, dataset_keys=[])
+        data, info = read_das_continuous_data_h5(data_path / file_name, dataset_keys=[])
 
-    ## TOOD: why do we need to read a list but return the first one
-    return {"data": data_list[0], "info": info_list[0]}
+    return {"data": torch.tensor(data), "info": info}
 
 
 def read_das_continuous_data_h5(fn, dataset_keys=[]):
@@ -444,7 +420,12 @@ def read_das_continuous_data_h5(fn, dataset_keys=[]):
         info = {}
         for key in dataset_keys:
             info[key] = f[key][:]
-    return [data], [info]
+    return data, info
+
+def get_shape_das_continous_data_h5(file):
+    with h5py.File(file, "r") as f:
+        data_shape = f["Data"].shape
+    return data_shape
 
 
 # helper reading functions

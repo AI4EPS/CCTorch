@@ -4,8 +4,46 @@ from scipy import sparse
 from scipy.signal import tukey
 from scipy.sparse.linalg import lsmr
 from tqdm import tqdm
+import torch.nn.functional as F
 
 
+##### Ambient Noise ######
+def remove_median(data):
+    data = data - torch.mean(data, dim=-1, keepdim=True)
+    data = data - torch.median(data, dim=-2, keepdim=True)[0]
+    return data
+
+def moving_normalization(data, window_size = 50):
+
+#     ## more accurate, but double memory
+#     # data_ = F.pad(data, (window_size // 2, window_size // 2), mode="circular")
+#     # moving_mean = F.avg_pool1d(data_, kernel_size=window_size, stride=1)[..., : data.shape[-1]]
+    moving_mean = F.avg_pool1d(data, kernel_size=window_size, padding=window_size//2, stride=1)[..., : data.shape[-1]]
+    data -= moving_mean
+
+#     # data_ = F.pad(data, (window_size // 2, window_size // 2), mode="circular")
+#     # moving_std = F.lp_pool1d(data_, norm_type=2, kernel_size=window_size, stride=1)[..., : data.shape[-1]] / (
+#     #     window_size**0.5
+#     # )
+#     moving_std = F.lp_pool1d(data, norm_type=2, kernel_size=window_size, padding=window_size//2, stride=1)[..., : data.shape[-1]] / (window_size**0.5)
+#     data /= moving_std
+
+    moving_abs = F.avg_pool1d(torch.abs(data), kernel_size=window_size, padding=window_size//2, stride=1)[..., : data.shape[-1]]
+    data /= moving_abs
+
+    return data
+
+def filtering(data):
+    # f1, f2 = 0.1, 10
+    # passband = [f1 * 2 / fs, f2 * 2 / fs]
+    # b, a = scipy.signal.butter(2, passband, "bandpass")
+    # a = torch.tensor(a, dtype=data.dtype).to(self.device)
+    # b = torch.tensor(b, dtype=data.dtype).to(self.device)
+    # data = torchaudio.functional.filtfilt(data, a_coeffs=a, b_coeffs=b)
+    raise NotImplementedError
+
+
+##### Cross-Correlation ######
 def xcorr_lag(nt):
     nxcor = 2 * nt - 1
     return torch.arange(-(nxcor // 2), -(nxcor // 2) + nxcor)

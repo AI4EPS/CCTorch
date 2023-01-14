@@ -12,12 +12,12 @@ if __name__ == "__main__":
 
     # %%
     result_path = Path("../results")
-    figure_path = Path("../figures")
+    figure_path = Path("figures")
     if not figure_path.exists():
         figure_path.mkdir(parents=True)
 
     tmp = []
-    with h5py.File(result_path / "AM_000_004.h5", "r") as f:
+    with h5py.File(result_path / "AM_000_001.h5", "r") as f:
         pair_index = list(f.keys())
         pair_index = pd.DataFrame(pair_index, columns=["pair_index"])
         pair_index[["id1", "id2"]] = pair_index["pair_index"].apply(lambda x: pd.Series(x.split("_")))

@@ -76,7 +76,7 @@ class CCModel(nn.Module):
             xcor = self.transforms(xcor)
 
         pair_index = [f"{i}_{j}" for i, j in zip(x0["info"]["index"], x1["info"]["index"])]
-        return {"xcorr": xcor.cpu().numpy(), "info": {"pair_index": pair_index}}
+        return {"xcorr": xcor.cpu(), "info": {"pair_index": pair_index}}
 
     def forward_map(self, x):
         """Perform cross-correlation on input data (dataset_type == map)
@@ -136,4 +136,4 @@ class CCModel(nn.Module):
             if self.transforms is not None:
                 xcor = self.transforms(xcor)
 
-        return {"xcorr": xcor.cpu().numpy(), "info": {"pair_index": pair_index}}
+        return {"xcorr": xcor.cpu(), "info": {"pair_index": pair_index}}
