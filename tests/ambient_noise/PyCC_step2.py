@@ -41,8 +41,6 @@ nchunk = int(np.ceil(npair / npair_chunk))
 device = "cuda:0"  # GPU device, needs to be changed to multi
 
 #%% temporal normalization/ spectral whitening/ CC
-# ccall = np.zeros((npair, int(max_lag * fs * 2 + 1)))
-
 for idate in tqdm(dates):
 
     ccall = np.zeros((npair, int(max_lag * fs * 2 + 1)))
@@ -78,7 +76,6 @@ for idate in tqdm(dates):
         flag_mean += nseg
         # print(time.time() - t1)
 
-
         #%%
         for ichunk in range(nchunk):
 
@@ -109,6 +106,7 @@ for idate in tqdm(dates):
 #%% plot
 
 import matplotlib.pyplot as plt
+
 ccall = np.load(output_file_tmp)
 vmax = np.percentile(np.abs(ccall), 99)
 plt.imshow(
@@ -117,9 +115,9 @@ plt.imshow(
     aspect="auto",
     vmax=vmax,
     vmin=-vmax,
-    extent=(-max_lag, max_lag, ccall.shape[0], 0),
+    # extent=(-max_lag, max_lag, ccall.shape[0], 0),
     cmap="RdBu",
 )
-plt.savefig("test.png", dpi=300)
+plt.colorbar()
+plt.savefig("cc.png", dpi=300, bbox_inches="tight")
 plt.show()
-

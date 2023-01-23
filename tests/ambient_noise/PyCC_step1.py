@@ -18,7 +18,9 @@ from func_PyCC import *
 output_preprocessed = "./preprocessed/"
 filelist = glob.glob("/kuafu/DASdata/Ridgecrest_ODH3_2_Hourly/*.h5")
 filelist.sort()
-filelist = filelist[:2]
+# filelist = filelist[:2]
+filelist = filelist[:1]
+print(filelist)
 
 fs = 50  # sampling frequency
 f1, f2 = 0.1, 10  # bandpass filter in preprocessing
@@ -91,8 +93,6 @@ for ifile in tqdm(filelist):
     # print('read', time() - t1)
     # t1 = time()
 
-    print("Origin shape: ", data.shape, ", with sampling rate: ", fs)
-
     nchunk = int(np.ceil(npts / min_npts))
     out = Parallel(n_jobs=njobs)(
         delayed(preprocess)(data[:, int(min_length * fs * i) : int(min_length * fs * (i + 1))], fs, f1, f2, Decimation)
@@ -103,7 +103,6 @@ for ifile in tqdm(filelist):
 
     # t1 = time()
     fs_deci = fs / Decimation
-    print("Preprocess shape: ", data_out.shape, ", with sampling rate: ", fs_deci)
     output_h5 = h5py.File(outputname, "w")
     output_data = output_h5.create_dataset("Data", data=data_out)
     output_data.attrs["fs"] = fs_deci

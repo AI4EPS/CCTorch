@@ -116,9 +116,9 @@ def cross_correlation(signal_1, signal_2, is_spectral_whitening=False, whitening
         fft_1 = torch.fft.rfft(signal_1, fast_length, dim=-1)
         fft_2 = torch.fft.rfft(signal_2, fast_length, dim=-1)
 
-        if(is_spectral_whitening):
+        if is_spectral_whitening:
             fs, window_freq, f1, f2 = whitening_params
-            df = fs/fast_length
+            df = fs / fast_length
             fft_1 = spectral_whitening(fft_1, df, window_freq, f1, f2)
             fft_2 = spectral_whitening(fft_2, df, window_freq, f1, f2)
 
@@ -134,4 +134,3 @@ def cross_correlation(signal_1, signal_2, is_spectral_whitening=False, whitening
             :, fast_length // 2 - x_cor_sig_length // 2 : fast_length // 2 - x_cor_sig_length // 2 + x_cor_sig_length
         ]
         return final_result
-
