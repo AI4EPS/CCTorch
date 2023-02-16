@@ -116,6 +116,19 @@ def main(args):
         mode = args.mode
         auto_xcorr = args.auto_xcorr
 
+        ### ccmodel
+        dt = args.dt
+        fs = int(1. / dt)
+        maxlag = args.maxlag
+        nlag = int(maxlag / dt)
+        nma = (20, 0)
+        reduce_t = args.reduce_t
+        reduce_x = args.reduce_x
+        channel_shift = args.channel_shift
+        mccc = args.mccc
+        use_pair_index = True if args.dataset_type == "map" else False
+        domain = args.domain
+
         ### ambinet noise
         max_channel = args.max_channel
         min_channel = args.min_channel
@@ -126,19 +139,8 @@ def main(args):
         #### preprocessing for ambient noise
         transforms_on_file = True
         transforms_on_batch = False
-        window_size = 40
-
-        ### ccmodel
-        dt = args.dt
-        maxlag = args.maxlag
-        nlag = int(maxlag / dt)
-        nma = (20, 0)
-        reduce_t = args.reduce_t
-        reduce_x = args.reduce_x
-        channel_shift = args.channel_shift
-        mccc = args.mccc
-        use_pair_index = True if args.dataset_type == "map" else False
-        domain = args.domain
+        window_time = 40
+        window_size = window_time*fs
 
     ccconfig = CCConfig()
 
@@ -159,7 +161,7 @@ def main(args):
         pass
     elif args.mode == "AM":
         ## TODO add preprocess for ambient noise
-        preprocess.append(T.Lambda(remove_median))
+        # preprocess.append(T.Lambda(remove_median))
         preprocess.append(T.Lambda(functools.partial(moving_normalization, window_size=ccconfig.window_size)))
     preprocess = T.Compose(preprocess)
 
