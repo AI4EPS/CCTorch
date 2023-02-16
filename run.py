@@ -50,6 +50,7 @@ def get_args_parser(add_help=True):
         type=int,
         help="fixed channel index, if specified, min and max are ignored",
     )
+    parser.add_argument("--window-time", default=0, type=float, help="temporal normalization time length")
 
     # xcor parameters
     parser.add_argument("--domain", default="time", type=str, help="time domain or frequency domain")
@@ -139,8 +140,8 @@ def main(args):
         #### preprocessing for ambient noise
         transforms_on_file = True
         transforms_on_batch = False
-        window_time = 40
-        window_size = window_time*fs
+        window_time = args.window_time
+        window_size = int(window_time*fs)
 
     ccconfig = CCConfig()
 
@@ -161,8 +162,9 @@ def main(args):
         pass
     elif args.mode == "AM":
         ## TODO add preprocess for ambient noise
-        # preprocess.append(T.Lambda(remove_median))
-        preprocess.append(T.Lambda(functools.partial(moving_normalization, window_size=ccconfig.window_size)))
+        preprocess.append(T.Lambda(remove_median))
+        if(ccconfig.window_time > 0):
+            preprocess.append(T.Lambda(functools.partial(moving_normalization, window_size=ccconfig.window_size)))
     preprocess = T.Compose(preprocess)
 
     postprocess = []
