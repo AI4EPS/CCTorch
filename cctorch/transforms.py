@@ -8,12 +8,36 @@ import torch.nn.functional as F
 
 
 ##### Ambient Noise ######
-def remove_median(data):
-    data = data - torch.mean(data, dim=-1, keepdim=True)
-    data = data - torch.median(data, dim=-2, keepdim=True)[0]
+def diff(data, fs):
+    return torch.gradient(data, dim=-1) * fs
+
+def detrend(data):
+    return detrend_tensor(data, axis=-1)
+
+def remove_mean(data, dim=-1):
+    data = data - torch.mean(data, dim=dim, keepdim=True)
     return data
 
-def moving_normalization(data, window_size = 50):
+def bandpass_filtering(data):
+    # f1, f2 = 0.1, 10
+    # passband = [f1 * 2 / fs, f2 * 2 / fs]
+    # b, a = scipy.signal.butter(2, passband, "bandpass")
+    # a = torch.tensor(a, dtype=data.dtype).to(self.device)
+    # b = torch.tensor(b, dtype=data.dtype).to(self.device)
+    # data = torchaudio.functional.filtfilt(data, a_coeffs=a, b_coeffs=b)
+    raise NotImplementedError
+
+def narrow_filter(data):
+    pass
+
+def decimate(data):
+    pass
+
+def remove_median(data, dim=-2):
+    data = data - torch.median(data, dim=dim, keepdim=True)[0]
+    return data
+
+def moving_normalization(data, window_size):
 
 #     ## more accurate, but double memory
 #     # data_ = F.pad(data, (window_size // 2, window_size // 2), mode="circular")
@@ -28,20 +52,13 @@ def moving_normalization(data, window_size = 50):
 #     moving_std = F.lp_pool1d(data, norm_type=2, kernel_size=window_size, padding=window_size//2, stride=1)[..., : data.shape[-1]] / (window_size**0.5)
 #     data /= moving_std
 
-    moving_abs = F.avg_pool1d(torch.abs(data), kernel_size=window_size, padding=window_size//2, stride=1)[..., : data.shape[-1]]
+    moving_abs = F.avg_pool1d(torch.abs(data), kernel_size=window_size*fs, padding=window_size//2, stride=1)[..., : data.shape[-1]]
     data /= moving_abs
 
     return data
 
-def filtering(data):
-    # f1, f2 = 0.1, 10
-    # passband = [f1 * 2 / fs, f2 * 2 / fs]
-    # b, a = scipy.signal.butter(2, passband, "bandpass")
-    # a = torch.tensor(a, dtype=data.dtype).to(self.device)
-    # b = torch.tensor(b, dtype=data.dtype).to(self.device)
-    # data = torchaudio.functional.filtfilt(data, a_coeffs=a, b_coeffs=b)
-    raise NotImplementedError
-
+def spectral_whitening(data):
+    pass
 
 ##### Cross-Correlation ######
 def xcorr_lag(nt):
