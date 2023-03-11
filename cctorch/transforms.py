@@ -1,10 +1,12 @@
-import torch
 import numpy as np
+import torch
+import torch.nn.functional as F
+import scipy
 from scipy import sparse
 from scipy.signal import tukey
 from scipy.sparse.linalg import lsmr
 from tqdm import tqdm
-import torch.nn.functional as F
+import torchaudio
 
 
 ##### Ambient Noise ######
@@ -44,6 +46,73 @@ def filtering(data):
 
 
 ##### Cross-Correlation ######
+
+class DetectPeaks(torch.nn.Module):
+
+    def __init__(self,vmin=0.3, kernel=11, stride=1, K=3):
+        super().__init__()
+        self.vmin = vmin
+        self.kernel = kernel
+        self.stride = stride
+        self.K = K
+
+    def forward(self, meta):
+
+        xcorr = meta["xcorr"]
+        if "nlag" in meta:
+            nlag = meta["nlag"]
+        else:
+            nlag = xcorr.shape[-1]//2
+        
+
+        # nb, nc, nx, nt = xcorr.shape
+        padding = self.kernel // 2
+        smax = F.max_pool2d(torch.abs(xcorr), (1, self.kernel), stride=(1, self.stride), padding=(0, padding))
+        keep = (smax == xcorr).float()
+        topk_scores, topk_inds = torch.topk(xcorr * keep, self.K, sorted=True)
+
+        top_inds = topk_inds[..., 0]
+        nearby = torch.stack([top_inds-1, top_inds, top_inds+1], dim=-1).clamp(0, xcorr.shape[-1]-1)
+        meta["neighbor_score"] = torch.gather(xcorr, -1, nearby)
+
+        meta["topk_score"] = topk_scores
+        meta["topk_index"] = topk_inds - nlag
+
+        return meta
+    
+
+class Filtering(torch.nn.Module):
+    
+    def __init__(self, f1, f2, fs, alpha, dtype, device):
+        super().__init__()
+        self.f1 = f1
+        self.f2 = f2
+        self.fs = fs
+        self.alpha = alpha
+        # passband = [self.f1 * 2 / self.fs, self.f2 * 2 / self.fs]
+        b, a = scipy.signal.butter(2, [f1, f2], "bandpass", fs=fs)
+        # b, a = scipy.signal.butter(2, f1, "highpass", fs=fs)
+        self.a = torch.tensor(a, dtype=dtype).to(device)
+        self.b = torch.tensor(b, dtype=dtype).to(device)
+
+    def forward(self, data):
+
+        data = data - torch.mean(data, dim=-1, keepdim=True)
+        max_, _ = torch.max(torch.abs(data), dim=-1, keepdim=True)
+        max_[max_ == 0] = 1
+        data = data / max_
+
+        data = data - (torch.linspace(0, 1, data.shape[-1], device=data.device, dtype=data.dtype) 
+                       * (data[..., -1, None] - data[..., 0, None]) + data[..., 0, None])
+
+        taper = tukey(data.shape[-1], self.alpha)
+        data = data * torch.tensor(taper, device=data.device, dtype=data.dtype) 
+
+        data = torchaudio.functional.filtfilt(data, a_coeffs=self.a, b_coeffs=self.b, clamp=False)
+
+        return data
+    
+
 def xcorr_lag(nt):
     nxcor = 2 * nt - 1
     return torch.arange(-(nxcor // 2), -(nxcor // 2) + nxcor)
@@ -74,7 +143,10 @@ def fft_real_normalize(x):
 
 def normalize(x):
     x -= torch.mean(x, dim=-1, keepdims=True)
-    x /= x.square().sum(dim=-1, keepdims=True).sqrt()
+    # x /= x.square().sum(dim=-1, keepdims=True).sqrt()
+    norm = x.square().sum(dim=-1, keepdims=True).sqrt()
+    norm[norm == 0] = 1
+    x /= norm
     return x
 
 

@@ -1,17 +1,31 @@
+# %%
+import math
+import multiprocessing as mp
 import os
-from datetime import datetime, timedelta
+import dataclasses
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from multiprocessing import shared_memory
+from multiprocessing.pool import Pool, ThreadPool
 from pathlib import Path
 
+import gamma
 import h5py
+import matplotlib.pyplot as plt
 import numpy as np
+import obspy
 import pandas as pd
+import scipy
+import scipy.signal
 import torch
+from tqdm.auto import tqdm
+import json
 
-
+# %%
 def write_results(results, result_path, ccconfig, dim=1, rank=0, world_size=1):
     if ccconfig.mode == "CC":
         ## TODO: add writting for CC
-        pass
+        write_cc_pairs(results, result_path, ccconfig, dim=dim, rank=rank, world_size=world_size)
     elif ccconfig.mode == "TM":
         ## TODO: add writting for CC
         pass
@@ -20,6 +34,77 @@ def write_results(results, result_path, ccconfig, dim=1, rank=0, world_size=1):
     else:
         raise ValueError(f"{ccconfig.mode} not supported")
 
+
+def write_cc_pairs(results, result_path, ccconfig, dim=1, rank=0, world_size=1, plot_figure=False):
+    
+    if not isinstance(result_path, Path):
+        result_path = Path(result_path)
+
+    min_cc_score = ccconfig.min_cc_score
+    min_cc_ratio = ccconfig.min_cc_ratio  
+    min_cc_weight = ccconfig.min_cc_weight  
+
+    with h5py.File(result_path / f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5", "a") as fp:
+
+        for meta in results:
+
+            topk_index = meta["topk_index"]
+            topk_score = meta["topk_score"]
+            neighbor_score = meta["neighbor_score"]
+            pair_index = meta["pair_index"]
+
+            nb, nch, nx, nk = topk_index.shape
+
+            for i in range(nb):
+
+                cc_score = topk_score[i, :, :, 0]
+                cc_weight = topk_score[i, :, :, 0] - topk_score[i, :, :, 1]
+
+                if torch.sum((cc_score > min_cc_score) & (cc_weight > min_cc_weight)) > nch * nx * min_cc_ratio:
+
+                    pair_id = pair_index[i]
+                    id1, id2 = pair_id
+                    if id1 > id2:
+                        id1, id2 = id2, id1
+                        topk_index = - topk_index
+
+                    if f"{id1}/{id2}" not in fp:
+                        gp = fp.create_group(f"{id1}/{id2}")
+                    else:
+                        gp = fp[f"{id1}/{id2}"]
+                    
+                    if f"cc_score" in gp:
+                        del gp["cc_score"]
+                    gp.create_dataset(f"cc_score", data=topk_score[i].cpu())
+                    if f"cc_weight" in gp:
+                        del gp["cc_weight"]
+                    gp.create_dataset(f"cc_weight", data=cc_weight.cpu())
+                    if f"cc_index" in gp:
+                        del gp["cc_index"]
+                    gp.create_dataset(f"cc_index", data=topk_index[i].cpu())
+                    if f"neighbor_score" in gp:
+                        del gp["neighbor_score"]
+                    gp.create_dataset(f"neighbor_score", data=neighbor_score[i].cpu())
+                    
+                    if f"{id2}/{id1}" not in fp:
+                        fp[f"{id2}/{id1}"] = h5py.SoftLink(f"/{id1}/{id2}")
+                    
+                    if plot_figure:
+                        for j in range(nch):
+                            fig, ax = plt.subplots(nrows=1, ncols=3, squeeze=False, figsize=(10, 20), sharey=True)
+                            ax[0, 0].imshow(meta["xcorr"][i, j, :, :].cpu().numpy(), cmap="seismic", vmax=1, vmin=-1, aspect="auto")
+                            for k in range(nx):
+                                ax[0, 1].plot(meta["data1"][i, j, k, :].cpu().numpy()/np.max(np.abs(meta["data1"][i, j, k, :].cpu().numpy()))+k, linewidth=1, color="k")
+                                ax[0, 2].plot(meta["data2"][i, j, k, :].cpu().numpy()/np.max(np.abs(meta["data2"][i, j, k, :].cpu().numpy()))+k, linewidth=1, color="k")
+                            
+                            try:
+                                fig.savefig(f"debug/test_{pair_id[0]}_{pair_id[1]}_{j}.png", dpi=300)
+                            except:
+                                os.mkdir("debug")
+                                fig.savefig(f"debug/test_{pair_id[0]}_{pair_id[1]}_{j}.png", dpi=300)
+                            print(f"debug/test_{pair_id[0]}_{pair_id[1]}_{j}.png")
+                            plt.close(fig)
+ 
 
 def write_ambient_noise(results, result_path, ccconfig, dim=1, rank=0, world_size=1):
     if not isinstance(result_path, Path):

@@ -40,27 +40,27 @@ class CCModel(nn.Module):
                     - info (dict): information information of data2
         """
 
-        x0, x1 = x
+        x1, x2 = x
         if self.to_device:
-            data1 = x0["data"].to(self.device)
-            data2 = x1["data"].to(self.device)
+            data1 = x1["data"].to(self.device)
+            data2 = x2["data"].to(self.device)
         else:
-            data1 = x0["data"]
-            data2 = x1["data"]
+            data1 = x1["data"]
+            data2 = x2["data"]
 
         if self.domain == "time":
             ## using conv1d in time domain
-            nb1, nc1, nt1 = data1.shape
-            data1 = data1.view(1, nb1 * nc1, nt1)
-            nb2, nc2, nt2 = data2.shape
-            data2 = data2.view(nb2 * nc2, 1, nt2)
+            nb1, nc1, nx1, nt1 = data1.shape
+            data1 = data1.view(1, nb1 * nc1 * nx1, nt1)
+            nb2, nc2, nx2, nt2 = data2.shape
+            data2 = data2.view(nb2 * nc2 * nx2, 1, nt2)
             if self.channel_shift != 0:
                 xcor = F.conv1d(
-                    data1, torch.roll(data2, self.channel_shift, dims=-2), padding=self.nlag + 1, groups=nb1 * nc1
+                    data1, torch.roll(data2, self.channel_shift, dims=-2), padding=self.nlag, groups=nb1 * nc1 * nx1
                 )
             else:
-                xcor = F.conv1d(data1, data2, padding=self.nlag + 1, groups=nb1 * nc1)
-            xcor = xcor.view(nb1, nc1, -1)
+                xcor = F.conv1d(data1, data2, padding=self.nlag, groups=nb1 * nc1 * nx1)
+            xcor = xcor.view(nb1, nc1, nx1, -1)
 
         elif self.domain == "frequency":
             # xcorr with fft in frequency domain
@@ -70,13 +70,17 @@ class CCModel(nn.Module):
             else:
                 xcor_freq = data1 * torch.conj(data2)
             xcor_time = torch.fft.irfft(xcor_freq, n=nfast, dim=-1)
-            xcor = torch.roll(xcor_time, nfast // 2, dims=-1)[..., nfast // 2 - self.nlag + 1 : nfast // 2 + self.nlag]
+            xcor = torch.roll(xcor_time, nfast // 2, dims=-1)[..., nfast // 2 - self.nlag : nfast // 2 + self.nlag + 1]
 
+        pair_index = [(i.item(), j.item()) for i, j in zip(x1["info"]["index"], x2["info"]["index"])]
+        meta = {"xcorr": xcor, "pair_index": pair_index, 
+                "nlag": self.nlag,
+                "data1": x1["data"], "data2": x2["data"]}
         if self.transforms is not None:
-            xcor = self.transforms(xcor)
+            meta = self.transforms(meta)
 
-        pair_index = [f"{i}_{j}" for i, j in zip(x0["info"]["index"], x1["info"]["index"])]
-        return {"xcorr": xcor.cpu(), "info": {"pair_index": pair_index}}
+        return meta
+
 
     def forward_map(self, x):
         """Perform cross-correlation on input data (dataset_type == map)
@@ -133,7 +137,8 @@ class CCModel(nn.Module):
                     ..., nfast // 2 - self.nlag + 1 : nfast // 2 + self.nlag
                 ]
 
+            meta = {"xcorr": xcor, "pair_index": pair_index}
             if self.transforms is not None:
-                xcor = self.transforms(xcor)
+                meta = self.transforms(meta)
 
-        return {"xcorr": xcor.cpu(), "info": {"pair_index": pair_index}}
+        return meta
