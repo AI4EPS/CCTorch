@@ -73,21 +73,37 @@ def write_cc_pairs(results, result_path, ccconfig, dim=1, rank=0, world_size=1, 
                     else:
                         gp = fp[f"{id1}/{id2}"]
                     
+                    if f"cc_index" in gp:
+                        del gp["cc_index"]
+                    gp.create_dataset(f"cc_index", data=topk_index[i].cpu())
                     if f"cc_score" in gp:
                         del gp["cc_score"]
                     gp.create_dataset(f"cc_score", data=topk_score[i].cpu())
                     if f"cc_weight" in gp:
                         del gp["cc_weight"]
                     gp.create_dataset(f"cc_weight", data=cc_weight.cpu())
-                    if f"cc_index" in gp:
-                        del gp["cc_index"]
-                    gp.create_dataset(f"cc_index", data=topk_index[i].cpu())
                     if f"neighbor_score" in gp:
                         del gp["neighbor_score"]
                     gp.create_dataset(f"neighbor_score", data=neighbor_score[i].cpu())
                     
                     if f"{id2}/{id1}" not in fp:
-                        fp[f"{id2}/{id1}"] = h5py.SoftLink(f"/{id1}/{id2}")
+                        # fp[f"{id2}/{id1}"] = h5py.SoftLink(f"/{id1}/{id2}")
+                        gp = fp.create_group(f"{id2}/{id1}")
+                    else:
+                        gp = fp[f"{id2}/{id1}"]
+                    
+                    if f"cc_index" in gp:
+                        del gp["cc_index"]
+                    gp.create_dataset(f"cc_index", data= - topk_index[i].cpu())
+                    if f"cc_score" in gp:
+                        del gp["cc_score"]
+                    gp["cc_score"] = fp[f"{id1}/{id2}/cc_score"]
+                    if f"cc_weight" in gp:
+                        del gp["cc_weight"]
+                    gp["cc_weight"] = fp[f"{id1}/{id2}/cc_weight"]
+                    if f"neighbor_score" in gp:
+                        del gp["neighbor_score"]
+                    gp["neighbor_score"] = fp[f"{id1}/{id2}/neighbor_score"]
                     
                     if plot_figure:
                         for j in range(nch):
