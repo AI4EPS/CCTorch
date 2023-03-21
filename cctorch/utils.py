@@ -60,14 +60,15 @@ def write_cc_pairs(results, result_path, ccconfig, dim=1, rank=0, world_size=1, 
                 cc_score = topk_score[i, :, :, 0]
                 cc_weight = topk_score[i, :, :, 0] - topk_score[i, :, :, 1]
 
-                if torch.sum((cc_score > min_cc_score) & (cc_weight > min_cc_weight)) > nch * nx * min_cc_ratio:
+                if ((cc_score.max() >= min_cc_score) and (cc_weight.max() >= min_cc_weight) and
+                    (torch.sum((cc_score > min_cc_score) & (cc_weight > min_cc_weight)) >= nch * nx * min_cc_ratio)):
 
                     pair_id = pair_index[i]
                     id1, id2 = pair_id
-                    if id1 > id2:
+                    if int(id1) > int(id2):
                         id1, id2 = id2, id1
                         topk_index = - topk_index
-
+                
                     if f"{id1}/{id2}" not in fp:
                         gp = fp.create_group(f"{id1}/{id2}")
                     else:
@@ -86,24 +87,25 @@ def write_cc_pairs(results, result_path, ccconfig, dim=1, rank=0, world_size=1, 
                         del gp["neighbor_score"]
                     gp.create_dataset(f"neighbor_score", data=neighbor_score[i].cpu())
                     
-                    if f"{id2}/{id1}" not in fp:
-                        # fp[f"{id2}/{id1}"] = h5py.SoftLink(f"/{id1}/{id2}")
-                        gp = fp.create_group(f"{id2}/{id1}")
-                    else:
-                        gp = fp[f"{id2}/{id1}"]
-                    
-                    if f"cc_index" in gp:
-                        del gp["cc_index"]
-                    gp.create_dataset(f"cc_index", data= - topk_index[i].cpu())
-                    if f"cc_score" in gp:
-                        del gp["cc_score"]
-                    gp["cc_score"] = fp[f"{id1}/{id2}/cc_score"]
-                    if f"cc_weight" in gp:
-                        del gp["cc_weight"]
-                    gp["cc_weight"] = fp[f"{id1}/{id2}/cc_weight"]
-                    if f"neighbor_score" in gp:
-                        del gp["neighbor_score"]
-                    gp["neighbor_score"] = fp[f"{id1}/{id2}/neighbor_score"]
+                    if id2 != id1:
+                        if f"{id2}/{id1}" not in fp:
+                            # fp[f"{id2}/{id1}"] = h5py.SoftLink(f"/{id1}/{id2}")
+                            gp = fp.create_group(f"{id2}/{id1}")
+                        else:
+                            gp = fp[f"{id2}/{id1}"]
+                        
+                        if f"cc_index" in gp:
+                            del gp["cc_index"]
+                        gp.create_dataset(f"cc_index", data= - topk_index[i].cpu())
+                        if f"neighbor_score" in gp:
+                            del gp["neighbor_score"]
+                        gp.create_dataset(f"neighbor_score", data=neighbor_score[i].cpu().flip(-1))
+                        if f"cc_score" in gp:
+                            del gp["cc_score"]
+                        gp["cc_score"] = fp[f"{id1}/{id2}/cc_score"]
+                        if f"cc_weight" in gp:
+                            del gp["cc_weight"]
+                        gp["cc_weight"] = fp[f"{id1}/{id2}/cc_weight"]
                     
                     if plot_figure:
                         for j in range(nch):
@@ -120,7 +122,7 @@ def write_cc_pairs(results, result_path, ccconfig, dim=1, rank=0, world_size=1, 
                                 fig.savefig(f"debug/test_{pair_id[0]}_{pair_id[1]}_{j}.png", dpi=300)
                             print(f"debug/test_{pair_id[0]}_{pair_id[1]}_{j}.png")
                             plt.close(fig)
- 
+                            
 
 def write_ambient_noise(results, result_path, ccconfig, dim=1, rank=0, world_size=1):
     if not isinstance(result_path, Path):

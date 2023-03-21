@@ -49,7 +49,7 @@ def filtering(data):
 
 class DetectPeaks(torch.nn.Module):
 
-    def __init__(self,vmin=0.3, kernel=11, stride=1, K=3):
+    def __init__(self,vmin=0.3, kernel=3, stride=1, K=3):
         super().__init__()
         self.vmin = vmin
         self.kernel = kernel
@@ -66,8 +66,13 @@ class DetectPeaks(torch.nn.Module):
         
 
         # nb, nc, nx, nt = xcorr.shape
-        padding = self.kernel // 2
-        smax = F.max_pool2d(torch.abs(xcorr), (1, self.kernel), stride=(1, self.stride), padding=(0, padding))
+        
+        ## consider both positive and negative peaks
+        # smax = F.max_pool2d(torch.abs(xcorr), (1, self.kernel), stride=(1, self.stride), padding=(0, self.kernel // 2))
+        
+        ## only consider positive peaks
+        smax = F.max_pool2d(xcorr, (1, self.kernel), stride=(1, self.stride), padding=(0, self.kernel // 2))
+        
         keep = (smax == xcorr).float()
         topk_scores, topk_inds = torch.topk(xcorr * keep, self.K, sorted=True)
 
