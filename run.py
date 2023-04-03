@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import functools
+import json
 import torch
 import torch.nn as nn
 import torchvision.transforms as T
@@ -33,10 +34,12 @@ def get_args_parser(add_help=True):
     parser.add_argument("--data-list1", default=None, type=str, help="data list 1")
     parser.add_argument("--data-list2", default=None, type=str, help="data list 1")
     parser.add_argument("--data-path", default="./", type=str, help="data path")
+    parser.add_argument("--data-format", default="h5", type=str, help="data type in {h5, memmap}")
+    parser.add_argument("--config", default=None, type=str, help="config file")
     parser.add_argument("--result-path", default="./results", type=str, help="results path")
     parser.add_argument("--dataset-type", default="iterable", type=str, help="data loader type in {map, iterable}")
-    parser.add_argument("--block-num1", default=1, type=int, help="Number of blocks for the 1st data pair dimension")
-    parser.add_argument("--block-num2", default=1, type=int, help="Number of blocks for the 2nd data pair dimension")
+    parser.add_argument("--block-size1", default=1000, type=int, help="Number of sample for the 1st data pair dimension")
+    parser.add_argument("--block-size2", default=1000, type=int, help="Number of sample for the 2nd data pair dimension")
     parser.add_argument("--auto-xcorr", action="store_true", help="do auto-correlation for data list")
 
     ## ambient noise parameters
@@ -54,7 +57,7 @@ def get_args_parser(add_help=True):
     )
 
     # xcor parameters
-    parser.add_argument("--domain", default="time", type=str, help="time domain or frequency domain")
+    parser.add_argument("--domain", default="time", type=str, help="domain in {time, freqency}")
     parser.add_argument("--dt", default=0.01, type=float, help="time sampling interval")
     parser.add_argument("--maxlag", default=0.5, type=float, help="maximum time lag during cross-correlation")
     parser.add_argument("--taper", action="store_true", help="taper two data window")
@@ -93,8 +96,9 @@ def get_args_parser(add_help=True):
     )
     parser.add_argument("--batch-size", default=64, type=int, help="batch size")
     parser.add_argument("--buffer-size", default=10, type=int, help="buffer size for writing to h5 file")
-    parser.add_argument("--workers", default=0, type=int, help="data loading workers")
+    parser.add_argument("--workers", default=4, type=int, help="data loading workers")
     parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu, Default: cuda)")
+    parser.add_argument("--dtype", default="float32", type=str, help="data type (Use float32 or float64, Default: float32)")
 
     # distributed training parameters
     parser.add_argument("--world-size", default=1, type=int, help="number of distributed processes")
@@ -111,12 +115,18 @@ def main(args):
     rank = utils.get_rank() if args.distributed else 0
     world_size = utils.get_world_size() if args.distributed else 1
     device = torch.device(args.device)
+    
+    if args.config is not None:
+        with open(args.config, "r") as f:
+            config = json.load(f)
 
     @dataclass
     class CCConfig:
         ### dataset
         mode = args.mode
         auto_xcorr = args.auto_xcorr
+        dtype = torch.float32 if args.dtype == "float32" else torch.float64
+        device = args.device
 
         ### ambinet noise
         max_channel = args.max_channel
@@ -141,8 +151,16 @@ def main(args):
         mccc = args.mccc
         use_pair_index = True if args.dataset_type == "map" else False
         domain = args.domain
+        min_cc_score = 0.6
+        min_cc_ratio = 0.0 ## ratio is defined as the portion of channels with cc score larger than min_cc_score
+        min_cc_weight = 0.0 ## the weight is defined as the difference between largest and second largest cc score
 
-    ccconfig = CCConfig()
+        def __init__(self, config):
+            if config is not None:
+                for k, v in config.items():
+                    setattr(self, k, v)
+
+    ccconfig = CCConfig(config)
 
     if (rank == 0):
         if os.path.exists(args.result_path):
@@ -152,6 +170,7 @@ def main(args):
 
     preprocess = []
     if args.mode == "CC":
+        # preprocess.append(Filtering(1, 15, 100, 0.1, ccconfig.dtype, args.device))
         if args.taper:
             preprocess.append(T.Lambda(taper_time))
         if args.interp:
@@ -172,7 +191,7 @@ def main(args):
     postprocess = []
     if args.mode == "CC":
         ## TODO add preprocess for cross-correlation
-        pass
+        postprocess.append(DetectPeaks())
     elif args.mode == "TM":
         ## TODO add preprocess for template matching
         pass
@@ -187,9 +206,10 @@ def main(args):
             pair_list=args.pair_list,
             data_list1=args.data_list1,
             data_list2=args.data_list2,
-            block_num1=args.block_num1,
-            block_num2=args.block_num2,
+            block_size1=args.block_size1,
+            block_size2=args.block_size2,
             data_path=args.data_path,
+            data_format=args.data_format,
             device="cpu" if args.workers > 0 else args.device,
             transforms=preprocess,
             rank=rank,
@@ -201,9 +221,10 @@ def main(args):
             pair_list=args.pair_list,
             data_list1=args.data_list1,
             data_list2=args.data_list2,
-            block_num1=args.block_num1,
-            block_num2=args.block_num2,
+            block_size1=args.block_size1,
+            block_size2=args.block_size2,
             data_path=args.data_path,
+            data_format=args.data_format,
             device=args.device,
             transforms=preprocess,
             batch_size=args.batch_size,
@@ -240,7 +261,7 @@ def main(args):
     results = []
     num = 0
     metric_logger = utils.MetricLogger(delimiter="  ")
-    for data in metric_logger.log_every(dataloader, args.log_interval, ""):
+    for data in metric_logger.log_every(dataloader, max(1, 10240//args.batch_size), ""):
         result = ccmodel(data)
         results.append(result)
         num += 1
@@ -252,6 +273,6 @@ def main(args):
 
 
 if __name__ == "__main__":
-    torch.multiprocessing.set_start_method("spawn")
+    # torch.multiprocessing.set_start_method("spawn")
     args = get_args_parser().parse_args()
     main(args)

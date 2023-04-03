@@ -1,3 +1,4 @@
 CCTorch.egg-info
+*.pyc
 tests/ridgecrest
 tests/figures*/
