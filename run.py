@@ -3,6 +3,8 @@ import multiprocessing as mp
 from dataclasses import dataclass
 from multiprocessing import Manager
 from pathlib import Path
+import shutil
+import os
 
 import h5py
 import matplotlib.pyplot as plt
@@ -142,7 +144,11 @@ def main(args):
 
     ccconfig = CCConfig()
 
-    utils.mkdir(args.result_path)
+    if (rank == 0):
+        if os.path.exists(args.result_path):
+            print(f"Remove existing result path: {args.result_path}")
+            shutil.rmtree(args.result_path)
+        os.makedirs(args.result_path)
 
     preprocess = []
     if args.mode == "CC":
@@ -160,7 +166,7 @@ def main(args):
     elif args.mode == "AM":
         ## TODO add preprocess for ambient noise
         preprocess.append(T.Lambda(remove_median))
-        preprocess.append(T.Lambda(functools.partial(moving_normalization, window_size=ccconfig.window_size)))
+        # preprocess.append(T.Lambda(functools.partial(moving_normalization, window_size=ccconfig.window_size)))
     preprocess = T.Compose(preprocess)
 
     postprocess = []
