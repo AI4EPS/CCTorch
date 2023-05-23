@@ -1,2 +1,17 @@
 CCTorch.egg-info
 tests/ridgecrest
+tests/figures*/
+templates_hdf5/
+results/
+results_*/
+*.pyc
+*.h5
+*.png
+*.jpg
+*.txt
+*.json
+*.dat
+*.npy
+*.j2k
+*.rb
+cctorch.log
