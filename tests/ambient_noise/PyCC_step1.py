@@ -9,18 +9,18 @@ from time import time
 
 import h5py
 import numpy as np
+from func_PyCC import *
 from joblib import Parallel, delayed
 from tqdm import tqdm
-
-from func_PyCC import *
+import matplotlib.pyplot as plt
 
 #%% parameters for Ridgecrest_ODH3
-output_preprocessed = "./preprocessed/"
-filelist = glob.glob("/kuafu/DASdata/Ridgecrest_ODH3_2_Hourly/*.h5")
+# output_preprocessed = '/net/jin/ssd-tmp-nobak2/yyang7/MorroBay_preprocess/'
+# filelist = glob.glob('/kuafu/DASdata/MorroBay/*.h5')
+output_preprocessed = "./preprocess/"
+filelist = glob.glob("../../noise_data/*h5")
 filelist.sort()
-# filelist = filelist[:2]
-filelist = filelist[:1]
-print(filelist)
+# filelist = filelist[107:155]
 
 fs = 50  # sampling frequency
 f1, f2 = 0.1, 10  # bandpass filter in preprocessing
@@ -41,10 +41,11 @@ def preprocess(x, fs, f1, f2, Decimation, Diff=Diff, ram_win=ram_win):
     if Diff:
         x = np.gradient(x, axis=-1) * fs
     x = detrend(x, axis=-1)
+    # x = temporal_normalization(x, fs, ram_win)
     x = filter(x, fs, f1, f2)
     x = x[:, ::Decimation]
     fs_deci = fs / Decimation
-    x = x - np.median(x, 0)
+    x = x - np.median(x, 0)  # common mode noise
     x = temporal_normalization(x, fs_deci, ram_win)
     x = x.astype("float32")
     return x
@@ -75,7 +76,7 @@ for ifile in tqdm(filelist):
     fs_data = fid["Data"].attrs["fs"]
     nt_data = fid["Data"].attrs["nt"]
     if fs_data != fs:
-        print(f"wrong fs: {ifile}")
+        print(f"wrong fs: {ifile} {fs_data} {fs}")
         fid.close()
         continue
     if nt_data < min_npts:
@@ -85,7 +86,7 @@ for ifile in tqdm(filelist):
 
     # t1 = time()
 
-    data = fid["Data"][:]
+    data = fid["Data"][:]  # may do some spatial downsampling here
     nch = data.shape[0]
     npts = data.shape[1]
     fid.close()
@@ -110,4 +111,11 @@ for ifile in tqdm(filelist):
     output_data.attrs["nt"] = data_out.shape[1]
     output_data.attrs["nCh"] = data_out.shape[0]
     output_h5.close()
+
     # print(ifile,'save', time() - t1)
+    plt.figure()
+    vmax = np.std(data_out[:, -1000:]) * 5
+    plt.imshow(data_out[:, -1000:], aspect="auto", vmin=-vmax, vmax=vmax, cmap="seismic")
+    plt.colorbar()
+    plt.savefig(f"cc_step1_{ifile.split('/')[-1]}.png", dpi=300)
+    # raise

@@ -30,81 +30,81 @@ def get_args_parser(add_help=True):
     import argparse
 
     parser = argparse.ArgumentParser(description="Cross-Correlation using Pytorch", add_help=add_help)
-    parser.add_argument("--pair-list", default=None, type=str, help="pair list")
-    parser.add_argument("--data-list1", default=None, type=str, help="data list 1")
-    parser.add_argument("--data-list2", default=None, type=str, help="data list 1")
-    parser.add_argument("--data-path", default="./", type=str, help="data path")
-    parser.add_argument("--data-format", default="h5", type=str, help="data type in {h5, memmap}")
+    parser.add_argument(
+        "--mode",
+        default="CC",
+        type=str,
+        help="mode for tasks of CC (cross-correlation), TM (template matching), and AN (ambient noise)",
+    )
+    parser.add_argument("--pair_list", default=None, type=str, help="pair list")
+    parser.add_argument("--data_list1", default=None, type=str, help="data list 1")
+    parser.add_argument("--data_list2", default=None, type=str, help="data list 1")
+    parser.add_argument("--data_path", default="./", type=str, help="data path")
+    parser.add_argument("--data_format", default="h5", type=str, help="data type in {h5, memmap}")
     parser.add_argument("--config", default=None, type=str, help="config file")
-    parser.add_argument("--result-path", default="./results", type=str, help="results path")
-    parser.add_argument("--dataset-type", default="iterable", type=str, help="data loader type in {map, iterable}")
-    parser.add_argument("--block-size1", default=1000, type=int, help="Number of sample for the 1st data pair dimension")
-    parser.add_argument("--block-size2", default=1000, type=int, help="Number of sample for the 2nd data pair dimension")
-    parser.add_argument("--auto-xcorr", action="store_true", help="do auto-correlation for data list")
+    parser.add_argument("--result_path", default="./results", type=str, help="results path")
+    parser.add_argument("--dataset_type", default="iterable", type=str, help="data loader type in {map, iterable}")
+    parser.add_argument("--block_size1", default=1000, type=int, help="Number of sample for the 1st data pair dimension")
+    parser.add_argument("--block_size2", default=1000, type=int, help="Number of sample for the 2nd data pair dimension")
+    parser.add_argument("--auto_xcorr", action="store_true", help="do auto-correlation for data list")
+
+    ## common
+    parser.add_argument("--dt", default=0.01, type=float, help="time sampling interval")
+    parser.add_argument("--sampling_rate", default=100, type=float, help="sampling frequency")
+    parser.add_argument("--domain", default="time", type=str, help="domain in {time, freqency, stft}")
+    parser.add_argument("--maxlag", default=0.5, type=float, help="maximum time lag during cross-correlation")
+    parser.add_argument("--batch_size", default=64, type=int, help="batch size")
+    parser.add_argument("--buffer_size", default=10, type=int, help="buffer size for writing to h5 file")
+    parser.add_argument("--workers", default=4, type=int, help="data loading workers")
+    parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu, Default: cuda)")
+    parser.add_argument("--dtype", default="float32", type=str, help="data type (Use float32 or float64, Default: float32)")
 
     ## ambient noise parameters
-    parser.add_argument("--min-channel", default=0, type=int, help="minimum channel index")
-    parser.add_argument("--max-channel", default=None, type=int, help="maximum channel index")
-    parser.add_argument("--delta-channel", default=1, type=int, help="channel interval")
-    parser.add_argument("--left-end-channel", default=None, type=int, help="channel index of the left end from the source")
-    parser.add_argument("--right-end-channel", default=None, type=int, help="channel index of the right end from the source")
+    parser.add_argument("--min_channel", default=0, type=int, help="minimum channel index")
+    parser.add_argument("--max_channel", default=None, type=int, help="maximum channel index")
+    parser.add_argument("--delta_channel", default=1, type=int, help="channel interval")
+    parser.add_argument("--left_channel", default=None, type=int, help="channel index of the left end from the source")
+    parser.add_argument("--right_channel", default=None, type=int, help="channel index of the right end from the source")
     parser.add_argument(
-        "--fixed-channels",
+        "--fixed_channels",
         nargs="+",
         default=None,
         type=int,
         help="fixed channel index, if specified, min and max are ignored",
     )
 
-    # xcor parameters
-    parser.add_argument("--domain", default="time", type=str, help="domain in {time, freqency}")
-    parser.add_argument("--dt", default=0.01, type=float, help="time sampling interval")
-    parser.add_argument("--maxlag", default=0.5, type=float, help="maximum time lag during cross-correlation")
+    # cross-correlation parameters
     parser.add_argument("--taper", action="store_true", help="taper two data window")
     parser.add_argument("--interp", action="store_true", help="interpolate the data window along time axs")
-    parser.add_argument("--scale-factor", default=10, type=int, help="interpolation scale up factor")
+    parser.add_argument("--scale_factor", default=10, type=int, help="interpolation scale up factor")
     parser.add_argument(
-        "--channel-shift", default=0, type=int, help="channel shift of 2nd window for cross-correlation"
+        "--channel_shift", default=0, type=int, help="channel shift of 2nd window for cross-correlation"
     )
-    parser.add_argument("--reduce-t", action="store_true", help="reduce the time axis of xcor data")
+    parser.add_argument("--reduce_t", action="store_true", help="reduce the time axis of xcor data")
     parser.add_argument(
-        "--reduce-x",
+        "--reduce_x",
         action="store_true",
         help="reduce the channel axis of xcor data: only have effect when reduce_t is true",
     )
     parser.add_argument(
         "--mccc", action="store_true", help="use mccc to reduce time axis: only have effect when reduce_t is true"
     )
-    parser.add_argument("--phase-type1", default="P", type=str, help="Phase type of the 1st data window")
-    parser.add_argument("--phase-type2", default="S", type=str, help="Phase type of the 2nd data window")
+    parser.add_argument("--phase_type1", default="P", type=str, help="Phase type of the 1st data window")
+    parser.add_argument("--phase_type2", default="S", type=str, help="Phase type of the 2nd data window")
     parser.add_argument(
-        "--path-xcor-data", default="", type=str, help="path to save xcor data output: path_{channel_shift}"
+        "--path_xcor_data", default="", type=str, help="path to save xcor data output: path_{channel_shift}"
     )
     parser.add_argument(
-        "--path-xcor-pick", default="", type=str, help="path to save xcor pick output: path_{channel_shift}"
+        "--path_xcor_pick", default="", type=str, help="path to save xcor pick output: path_{channel_shift}"
     )
     parser.add_argument(
-        "--path-xcor-matrix", default="", type=str, help="path to save xcor matrix output: path_{channel_shift}"
+        "--path_xcor_matrix", default="", type=str, help="path to save xcor matrix output: path_{channel_shift}"
     )
-    parser.add_argument("--path-dasinfo", default="", type=str, help="csv file with das channel info")
-
-    parser.add_argument(
-        "--mode",
-        default="CC",
-        type=str,
-        help="mode for tasks of CC (cross-correlation), TM (template matching), and AM (ambient noise)",
-    )
-    parser.add_argument("--batch-size", default=64, type=int, help="batch size")
-    parser.add_argument("--buffer-size", default=10, type=int, help="buffer size for writing to h5 file")
-    parser.add_argument("--workers", default=4, type=int, help="data loading workers")
-    parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu, Default: cuda)")
-    parser.add_argument("--dtype", default="float32", type=str, help="data type (Use float32 or float64, Default: float32)")
+    parser.add_argument("--path_dasinfo", default="", type=str, help="csv file with das channel info")
 
     # distributed training parameters
     parser.add_argument("--world-size", default=1, type=int, help="number of distributed processes")
     parser.add_argument("--dist-url", default="env://", type=str, help="url used to set up distributed training")
-
-    parser.add_argument("--log-interval", default=10, type=int, help="log every n iterations")
     return parser
 
 
@@ -114,43 +114,60 @@ def main(args):
     utils.init_distributed_mode(args)
     rank = utils.get_rank() if args.distributed else 0
     world_size = utils.get_world_size() if args.distributed else 1
-    device = torch.device(args.device)
     
     if args.config is not None:
         with open(args.config, "r") as f:
             config = json.load(f)
+    else:
+        config = None
 
     @dataclass
     class CCConfig:
-        ### dataset
+        ## common
         mode = args.mode
-        auto_xcorr = args.auto_xcorr
+        domain = args.domain
         dtype = torch.float32 if args.dtype == "float32" else torch.float64
         device = args.device
+        dt = args.dt
+        fs = args.sampling_rate
+        if dt != 0.01:
+            fs = 1 / dt
+        if fs != 100:
+            dt = 1 / fs
+        maxlag = args.maxlag
+        nlag = int(maxlag / dt)
+        pre_fft = False ## if true, do fft in dataloader
+        auto_xcorr = args.auto_xcorr
 
-        ### ambinet noise
+        ## ambinet noise
+        spectral_whitening = True
         max_channel = args.max_channel
         min_channel = args.min_channel
         delta_channel = args.delta_channel
-        left_end_channel = args.left_end_channel
-        right_end_channel = args.right_end_channel
+        left_channel = args.left_channel
+        right_channel = args.right_channel
         fixed_channels = args.fixed_channels
-        #### preprocessing for ambient noise
-        transforms_on_file = True
-        transforms_on_batch = False
-        window_size = 40
+        ### preprocessing for ambient noise
+        transform_on_file = True
+        transform_on_batch = False
+        transform_device = "cpu"
+        window_size = 64
+        #### bandpass filter
+        fmin = 0.1
+        fmax = 10
+        ftype = "bandpass"
+        alpha = 0.05 # tukey window parameter
+        order = 2
+        #### Decimate
+        decimate_factor = 2
 
-        ### ccmodel
-        dt = args.dt
-        maxlag = args.maxlag
-        nlag = int(maxlag / dt)
+        ## cross-correlation
         nma = (20, 0)
         reduce_t = args.reduce_t
         reduce_x = args.reduce_x
         channel_shift = args.channel_shift
         mccc = args.mccc
         use_pair_index = True if args.dataset_type == "map" else False
-        domain = args.domain
         min_cc_score = 0.6
         min_cc_ratio = 0.0 ## ratio is defined as the portion of channels with cc score larger than min_cc_score
         min_cc_weight = 0.0 ## the weight is defined as the difference between largest and second largest cc score
@@ -165,7 +182,9 @@ def main(args):
     if (rank == 0):
         if os.path.exists(args.result_path):
             print(f"Remove existing result path: {args.result_path}")
-            shutil.rmtree(args.result_path)
+            if os.path.exists(args.result_path + "_backup"):
+                shutil.rmtree(args.result_path + "_backup")
+            shutil.move(args.result_path, args.result_path + "_backup")
         os.makedirs(args.result_path)
 
     preprocess = []
@@ -182,21 +201,27 @@ def main(args):
     elif args.mode == "TM":
         ## TODO add preprocess for template matching
         pass
-    elif args.mode == "AM":
+    elif args.mode == "AN":
         ## TODO add preprocess for ambient noise
-        preprocess.append(T.Lambda(remove_median))
-        # preprocess.append(T.Lambda(functools.partial(moving_normalization, window_size=ccconfig.window_size)))
+        preprocess.append(TemporalGradient(ccconfig.fs))
+        preprocess.append(TemporalMovingNormalization(int(30*ccconfig.fs))) #30s for 25Hz
+        preprocess.append(Filtering(ccconfig.fmin, ccconfig.fmax, ccconfig.fs, ccconfig.ftype, ccconfig.alpha, ccconfig.dtype, ccconfig.transform_device)) #50Hz
+        preprocess.append(Decimation(ccconfig.decimate_factor)) #25Hz
+        preprocess.append(T.Lambda(remove_spatial_median))
+        preprocess.append(TemporalMovingNormalization(int(2*ccconfig.fs//ccconfig.decimate_factor))) #2s for 25Hz
+
     preprocess = T.Compose(preprocess)
 
     postprocess = []
     if args.mode == "CC":
-        ## TODO add preprocess for cross-correlation
+        ## add postprocess for cross-correlation
         postprocess.append(DetectPeaks())
+        postprocess.append(Reduction())
     elif args.mode == "TM":
-        ## TODO add preprocess for template matching
+        ## TODO add postprocess for template matching
         pass
-    elif args.mode == "AM":
-        ## TODO add preprocess for ambient noise
+    elif args.mode == "AN":
+        ## TODO add postprocess for ambient noise
         pass
     postprocess = T.Compose(postprocess)
 
@@ -258,15 +283,17 @@ def main(args):
     )
     ccmodel.to(args.device)
 
-    results = []
     num = 0
+    results = []
     metric_logger = utils.MetricLogger(delimiter="  ")
-    for data in metric_logger.log_every(dataloader, max(1, 10240//args.batch_size), ""):
+    log_freq = max(1, 10240//args.batch_size) if args.mode == "CC" else 1
+    for data in metric_logger.log_every(dataloader, log_freq, ""):
         result = ccmodel(data)
         results.append(result)
         num += 1
         if num % args.buffer_size == 0:
             write_results(results, args.result_path, ccconfig, rank=rank, world_size=world_size)
+            num = 0
             results = []
     if num > 0:
         write_results(results, args.result_path, ccconfig, rank=rank, world_size=world_size)

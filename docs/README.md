@@ -7,7 +7,10 @@ python run.py
 
 - Example for ambient noise
 ```
-python run.py --data-list1=tests/data_am1.txt --data-path=tests --dt=0.04 --maxlag=30  --mode=AM  --block-num1 1 --block-num2 2 --fixed-channels 300 500 700 900  --log-interval 1
+python run.py --data-list1=tests/data_am1.txt --data-path=tests --dt=0.04 --maxlag=30  --mode=AN  --block-num1 1 --block-num2 2 --fixed-channels 300 500 700 900  --log-interval 1
+```
+```
+python run.py --data_list1=noise_data_list.txt --data_path=noise_data --sampling_rate=50 --maxlag=30  --mode=AN  --block_size1 1 --block_size2 500 --fixed_channels 500 --domain stft 
 ```
 
 ## Multi GPUs (e.g., using 8 GPUs)

@@ -3,10 +3,9 @@
 # Yan Yang July 2022
 
 import numpy as np
+from scipy.signal import tukey, butter, filtfilt, detrend
 import torch
 import torch.fft
-from scipy.signal import butter, detrend, filtfilt, tukey
-
 
 #%%
 def filter(data, fs, f1, f2, alpha=0.05):
@@ -20,7 +19,7 @@ def filter(data, fs, f1, f2, alpha=0.05):
     """
     window = tukey(data.shape[1], alpha=alpha)
     passband = [f1 * 2 / fs, f2 * 2 / fs]
-    b, a = butter(2, passband, "bandpass")
+    b, a = butter(4, passband, "bandpass")
 
     dataf = filtfilt(b, a, data * window)
     return dataf
@@ -37,7 +36,7 @@ def running_absolute_mean(trace, nwin):
     tmp[nwin:-nwin] = np.abs(trace)
     tmp[:nwin] = tmp[nwin]
     tmp[-nwin:] = tmp[-nwin - 1]
-    return trace / np.convolve(tmp, np.ones(nwin) / nwin, mode="same")[nwin:-nwin]
+    return np.nan_to_num(trace / np.convolve(tmp, np.ones(nwin) / nwin, mode="same")[nwin:-nwin])
 
 
 def temporal_normalization(data, fs, window_time):

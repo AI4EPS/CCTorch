@@ -31,7 +31,7 @@ class CCDataset(Dataset):
         **kwargs,
     ):
         super(CCDataset).__init__()
-        ## TODO: extract this part into a function; keep this temporary until TM and AM are implemented
+        ## TODO: extract this part into a function; keep this temporary until TM and AN are implemented
         ## pair_list has the highest priority
         if pair_list is not None:
             self.pair_list, self.data_list1, self.data_list2 = read_pair_list(pair_list)
@@ -139,7 +139,7 @@ class CCIterableDataset(IterableDataset):
         self.dtype = dtype
         self.num_batch = None
 
-        if self.mode == "AM":
+        if self.mode == "AN":
              ## For ambient noise, we split chunks in the sampling function
             self.data_list1 = self.data_list1[rank::world_size]
         else:
@@ -162,7 +162,7 @@ class CCIterableDataset(IterableDataset):
             num_workers = worker_info.num_workers
             worker_id = worker_info.id
 
-        if self.mode == "AM":
+        if self.mode == "AN":
             return iter(self.sample_ambient_noise(self.data_list1[worker_id::num_workers]))
         else:
             return iter(self.sample(self.block_index[worker_id::num_workers]))
@@ -190,7 +190,7 @@ class CCIterableDataset(IterableDataset):
             local_dict = {}
             event1, event2 = self.group1[i], self.group2[j]
             pairs = generate_pairs(event1, event2, self.config.auto_xcorr)
-            data1, info1, data2, info2 = [], [], [], []
+            data1, index1, info1, data2, index2, info2 = [], [], [], [], [], []
             num = 0
 
             for (ii, jj) in pairs:
@@ -202,7 +202,7 @@ class CCIterableDataset(IterableDataset):
 
                 if ii not in local_dict:
                     if self.data_format == "memmap":
-                        meta1 = {"data": self.ndarray[ii], "info": {"index": ii}}
+                        meta1 = {"data": self.ndarray[ii], "index":ii, "info": {}}
                     else:
                         meta1 = read_data(ii, self.data_path, self.data_format)
                     data = torch.tensor(meta1["data"], dtype=self.dtype).to(self.device)
@@ -216,7 +216,7 @@ class CCIterableDataset(IterableDataset):
 
                 if jj not in local_dict:
                     if self.data_format == "memmap":
-                        meta2 = {"data": self.ndarray[jj], "info": {"index": jj}}
+                        meta2 = {"data": self.ndarray[jj], "index": jj, "info": {}}
                     else:
                         meta2 = read_data(jj, self.data_path, self.data_format)
                     data = torch.tensor(meta2["data"], dtype=self.dtype).to(self.device)
@@ -229,47 +229,60 @@ class CCIterableDataset(IterableDataset):
                     meta2 = local_dict[jj]
 
                 data1.append(meta1["data"])
+                index1.append(meta1["index"])
                 info1.append(meta1["info"])
                 data2.append(meta2["data"])
+                index2.append(meta2["index"])
                 info2.append(meta2["info"])
 
                 num += 1
                 if num == self.batch_size:
-                    num = 0
+                    
                     data_batch1 = torch.stack(data1)
                     data_batch2 = torch.stack(data2)
-                    info_batch1 = {k: [x[k] for x in info1] for k in info1[0].keys()}
-                    info_batch2 = {k: [x[k] for x in info2] for k in info2[0].keys()}
-                    data1, info1, data2, info2 = [], [], [], []
-                    yield {"data": data_batch1, "info": info_batch1}, {"data": data_batch2, "info": info_batch2}
+                    # info_batch1 = {k: [x[k] for x in info1] for k in info1[0].keys()}
+                    # info_batch2 = {k: [x[k] for x in info2] for k in info2[0].keys()}
+                    # yield {"data": data_batch1, "info": info_batch1}, {"data": data_batch2, "info": info_batch2}
+                    yield {"data": data_batch1, "index": index1, "info": info1}, {"data": data_batch2, "index": index2, "info": info2}
+                    
+                    num = 0
+                    data1, index1, info1, data2, index2, info2 = [], [], [], [], [], []
 
             ## yield the last batch
             if num > 0:
                 data_batch1 = torch.stack(data1)
                 data_batch2 = torch.stack(data2)
-                info_batch1 = {k: [x[k] for x in info1] for k in info1[0].keys()}
-                info_batch2 =  {k: [x[k] for x in info2] for k in info2[0].keys()}
-                data1, info1, data2, info2 = [], [], [], []
-                yield {"data": data_batch1, "info": info_batch1}, {"data": data_batch2, "info": info_batch2}
-
+                # info_batch1 = {k: [x[k] for x in info1] for k in info1[0].keys()}
+                # info_batch2 =  {k: [x[k] for x in info2] for k in info2[0].keys()}
+                
+                # yield {"data": data_batch1, "info": info_batch1}, {"data": data_batch2, "info": info_batch2}
+                yield {"data": data_batch1,"index": index1, "info": info1}, {"data": data_batch2, "index": index2, "info": info2}
 
     def sample_ambient_noise(self, data_list):
 
         for fd in data_list:
 
             meta = read_data(fd, self.data_path, self.data_format, mode=self.mode)  # (nch, nt)
-            data = meta["data"].unsqueeze(0)  # (1, nch, nt)
+            data = meta["data"].float().unsqueeze(0).unsqueeze(0)  # (1, 1, nx, nt)
             
-            if (self.config.transforms_on_file) and (self.transforms is not None):
+            if (self.config.transform_on_file) and (self.transforms is not None):
                 data = self.transforms(data)
 
-            nbatch, nch, nt = data.shape
+            # plt.figure()
+            # tmp = data[0, 0, :, :].cpu().numpy()
+            # vmax = np.std(tmp[:, -1000:]) * 5
+            # plt.imshow(tmp[:, -1000:], aspect="auto", vmin=-vmax, vmax=vmax, cmap="seismic")
+            # plt.colorbar()
+            # plt.savefig(f"cctorch_step1_{fd.split('/')[-1]}.png", dpi=300)
+            # raise
+
+            nb, nc, nx, nt = data.shape
 
             ## cut blocks
             min_channel = self.config.min_channel if self.config.min_channel is not None else 0
-            max_channel = self.config.max_channel if self.config.max_channel is not None else nch
-            left_end_channel = self.config.left_end_channel if self.config.left_end_channel is not None else -nch
-            right_end_channel = self.config.right_end_channel if self.config.right_end_channel is not None else nch
+            max_channel = self.config.max_channel if self.config.max_channel is not None else nx
+            left_channel = self.config.left_channel if self.config.left_channel is not None else -nx
+            right_channel = self.config.right_channel if self.config.right_channel is not None else nx
 
             if self.config.fixed_channels is not None:
                 ## only process channels passed by "--fixed-channels" as source
@@ -283,12 +296,12 @@ class CCIterableDataset(IterableDataset):
                 ## using min_channel and max_channel to selected channels that are within a range 
                 lists_1 = range(min_channel, max_channel, self.config.delta_channel)
             lists_2 = range(min_channel, max_channel, self.config.delta_channel)
-            block_num1 = int(np.ceil(len(lists_1) / self.config.block_size1))
-            block_num2 = int(np.ceil(len(lists_2) / self.config.block_size2))
+            block_num1 = int(np.ceil(len(lists_1) / self.block_size1))
+            block_num2 = int(np.ceil(len(lists_2) / self.block_size2))
             group_1 = [list(x) for x in np.array_split(lists_1, block_num1) if len(x) > 0]
             group_2 = [list(x) for x in np.array_split(lists_2, block_num2) if len(x) > 0]
             block_index = list(itertools.product(range(len(group_1)), range(len(group_2))))
-            
+
             ## loop each block
             for i, j in block_index:
                 block1 = group_1[i]
@@ -296,19 +309,19 @@ class CCIterableDataset(IterableDataset):
                 index_i = []
                 index_j = []
                 for ii, jj in itertools.product(block1, block2):
-                    if (jj < (ii + left_end_channel)) or (jj > (ii + right_end_channel)):
+                    if (jj < (ii + left_channel)) or (jj > (ii + right_channel)):
                         continue
                     index_i.append(ii)
                     index_j.append(jj)
 
-                data_i = data[:, index_i, :].to(self.device)
-                data_j = data[:, index_j, :].to(self.device)
+                data_i = data[:, :, index_i, :].to(self.device)
+                data_j = data[:, :, index_j, :].to(self.device)
                 
-                if (self.config.transforms_on_batch) and (self.transforms is not None):
+                if (self.config.transform_on_batch) and (self.transforms is not None):
                     data_i = self.transforms(data_i)
                     data_j = self.transforms(data_j)
 
-                yield {"data": data_i, "info": {"index": index_i},},  {"data": data_j, "info": {"index": index_j}}
+                yield {"data": data_i, "index": [index_i], "info": {},},  {"data": data_j, "index": [index_j], "info": {}}
 
 
     def __len__(self):
@@ -323,7 +336,7 @@ class CCIterableDataset(IterableDataset):
                 num_workers = worker_info.num_workers
                 worker_id = worker_info.id
 
-            if self.mode == "AM":
+            if self.mode == "AN":
                 num_samples = self.count_sample_ambient_noise(num_workers, worker_id)
             else:
                 num_samples = self.count_sample(num_workers, worker_id)
@@ -358,13 +371,13 @@ class CCIterableDataset(IterableDataset):
         num_samples = 0
         for fd in self.data_list1:
 
-            nch, nt = get_shape_das_continous_data_h5(self.data_path / fd)  # (nch, nt)
+            nx, nt = get_shape_das_continous_data_h5(self.data_path / fd)  # (nch, nt)
 
             ## cut blocks
             min_channel = self.config.min_channel if self.config.min_channel is not None else 0
-            max_channel = self.config.max_channel if self.config.max_channel is not None else nch
-            left_end_channel = self.config.left_end_channel if self.config.left_end_channel is not None else -nch
-            right_end_channel = self.config.right_end_channel if self.config.right_end_channel is not None else nch
+            max_channel = self.config.max_channel if self.config.max_channel is not None else nx
+            left_channel = self.config.left_channel if self.config.left_channel is not None else -nx
+            right_channel = self.config.right_channel if self.config.right_channel is not None else nx
 
             if self.config.fixed_channels is not None:
                 ## only process channels passed by "--fixed-channels" as source
@@ -378,8 +391,8 @@ class CCIterableDataset(IterableDataset):
                 ## using min_channel and max_channel to selected channels that are within a range 
                 lists_1 = range(min_channel, max_channel, self.config.delta_channel)
             lists_2 = range(min_channel, max_channel, self.config.delta_channel)
-            block_num1 = int(np.ceil(len(lists_1) / self.config.block_size1))
-            block_num2 = int(np.ceil(len(lists_2) / self.config.block_size2))
+            block_num1 = int(np.ceil(len(lists_1) / self.block_size1))
+            block_num2 = int(np.ceil(len(lists_2) / self.block_size2))
             group_1 = [list(x) for x in np.array_split(lists_1, block_num1) if len(x) > 0]
             group_2 = [list(x) for x in np.array_split(lists_2, block_num2) if len(x) > 0]
             block_index = list(itertools.product(range(len(group_1)), range(len(group_2))))
@@ -461,7 +474,7 @@ def read_data(file_name, data_path, format="h5", mode="CC"):
             data = data_list[0]
             info = info_list[0]
             
-    elif mode == "AM":
+    elif mode == "AN":
         if format == "h5": 
             data, info = read_das_continuous_data_h5(data_path / file_name, dataset_keys=[])
 
@@ -470,7 +483,12 @@ def read_data(file_name, data_path, format="h5", mode="CC"):
 
 def read_das_continuous_data_h5(fn, dataset_keys=[]):
     with h5py.File(fn, "r") as f:
-        data = f["Data"][:]
+        if "Data" in f:
+            data = f["Data"][:]
+        elif "data" in f:
+            data = f["data"][:]
+        else:
+            raise ValueError("Cannot find data in the file")
         info = {}
         for key in dataset_keys:
             info[key] = f[key][:]
@@ -478,7 +496,12 @@ def read_das_continuous_data_h5(fn, dataset_keys=[]):
 
 def get_shape_das_continous_data_h5(file):
     with h5py.File(file, "r") as f:
-        data_shape = f["Data"].shape
+        if "Data" in f:
+            data_shape = f["Data"].shape
+        elif "data" in f:
+            data_shape = f["data"].shape
+        else:
+            raise ValueError("Cannot find data in the file")
     return data_shape
 
 

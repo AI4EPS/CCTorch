@@ -11,31 +11,65 @@ from tqdm import tqdm
 if __name__ == "__main__":
 
     # %%
+    # result_path = Path("../results")
+    # figure_path = Path("figures")
+    # result_path = Path("../results_decompressed_100")
+    # figure_path = Path("figures_decompressed_100")
+
     result_path = Path("../results")
-    figure_path = Path("figures")
+    figure_path = Path("../figures")
+
+    # result_path = Path("../results_bak")
+    # figure_path = Path("../figures_bak")
+
+    # result_path = Path("./results_decompressed_100")
+    # figure_path = Path("./tests/figures_decompressed_100")
+
+    # result_path = Path("../results_compressed_jpeg")
+    # figure_path = Path("figures_compressed_jpeg")
+
+    # result_path = Path("results_compressed_jpeg_500")
+    # figure_path = Path("./tests/figures_compressed_jpeg_500")
+
+    # result_path = Path("./results_decompressed")
+    # figure_path = Path("./tests/figures_decompressed")
+    # result_path = Path("./results_decompressed")
+    # figure_path = Path("./tests/figures_decompressed")
+
     if not figure_path.exists():
         figure_path.mkdir(parents=True)
 
     tmp = []
-    with h5py.File(result_path / "AM_000_001.h5", "r") as f:
-        pair_index = list(f.keys())
-        pair_index = pd.DataFrame(pair_index, columns=["pair_index"])
-        pair_index[["id1", "id2"]] = pair_index["pair_index"].apply(lambda x: pd.Series(x.split("_")))
-        pair_index["id1"] = pair_index["id1"].astype(int)
-        pair_index["id2"] = pair_index["id2"].astype(int)
-        pair_index.sort_values(by=["id1", "id2"], inplace=True)
-
-        for id1 in tqdm(pair_index["id1"].unique()):
+    # first_channels = [300, 500, 700, 900]
+    first_channels = [500]
+    with h5py.File(result_path / "AN_000_001.h5", "r") as fp:
+        # pair_index = list(f.keys())
+        # pair_index = pd.DataFrame(pair_index, columns=["pair_index"])
+        # pair_index[["id1", "id2"]] = pair_index["pair_index"].apply(lambda x: pd.Series(x.split("_")))
+        # pair_index["id1"] = pair_index["id1"].astype(int)
+        # pair_index["id2"] = pair_index["id2"].astype(int)
+        # pair_index.sort_values(by=["id1", "id2"], inplace=True)
+        for chn in first_channels:
+            # second_channels = sorted([int(x.split("/")[-1]) for x in fp[f"/{chn}"].keys()])
             data = []
-            for key in pair_index[pair_index["id1"] == id1]["pair_index"]:
-                data.append(f[key][:])
-            data = np.concatenate(data)
+            index = []
+            for c in sorted(fp[f"/{chn}"].keys(), key=lambda x: int(x.split("/")[-1])):
+                data.append(fp[f"/{chn}/{c}"]["xcorr"][:])
+                index.append(c)
 
-            fig, axes = plt.subplots(1, 1)
+        # for id1 in tqdm(pair_index["id1"].unique()):
+        #     data = []
+        #     for key in pair_index[pair_index["id1"] == id1]["pair_index"]:
+        #         data.append(f[key][:])
+        #     data = np.concatenate(data)
+
+            data = np.stack(data)
+            # fig, axes = plt.subplots(1, 1)
+            plt.figure()
             vmax = np.std(data)
-            im = axes.imshow(data, vmin=-vmax, vmax=vmax, aspect="auto", cmap="RdBu")
-            fig.colorbar(im, ax=axes)
-            fig.savefig(figure_path / f"result_{id1}.png", dpi=300, bbox_inches="tight")
+            plt.imshow(data, vmin=-vmax, vmax=vmax, aspect="auto", cmap="RdBu")
+            plt.colorbar()
+            plt.savefig(figure_path / f"result_{chn}.png", dpi=300)
 
         # for i in range(1250):
         #     for j in [500]:

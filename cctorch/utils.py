@@ -22,20 +22,32 @@ from tqdm.auto import tqdm
 import json
 
 # %%
-def write_results(results, result_path, ccconfig, dim=1, rank=0, world_size=1):
+def write_results(results, result_path, ccconfig, rank=0, world_size=1):
     if ccconfig.mode == "CC":
         ## TODO: add writting for CC
-        write_cc_pairs(results, result_path, ccconfig, dim=dim, rank=rank, world_size=world_size)
+        write_cc_pairs(results, result_path, ccconfig, rank=rank, world_size=world_size)
     elif ccconfig.mode == "TM":
         ## TODO: add writting for CC
         pass
-    elif ccconfig.mode == "AM":
-        write_ambient_noise(results, result_path, ccconfig, dim=dim, rank=rank, world_size=world_size)
+    elif ccconfig.mode == "AN":
+        write_ambient_noise(results, result_path, ccconfig, rank=rank, world_size=world_size)
     else:
         raise ValueError(f"{ccconfig.mode} not supported")
 
 
-def write_cc_pairs(results, result_path, ccconfig, dim=1, rank=0, world_size=1, plot_figure=False):
+def write_cc_pairs(results, result_path, ccconfig, rank=0, world_size=1, plot_figure=False):
+    """
+    Write cross-correlation results to disk.
+    Parameters
+    ----------
+    results : list of dict
+        List of results from cross-correlation. 
+        e.g. [{
+            "topk_index": topk_index, 
+            "topk_score": topk_score, 
+            "neighbor_score": neighbor_score, 
+            "pair_index": pair_index}]
+    """
     
     if not isinstance(result_path, Path):
         result_path = Path(result_path)
@@ -43,11 +55,21 @@ def write_cc_pairs(results, result_path, ccconfig, dim=1, rank=0, world_size=1, 
     min_cc_score = ccconfig.min_cc_score
     min_cc_ratio = ccconfig.min_cc_ratio  
     min_cc_weight = ccconfig.min_cc_weight  
+    
+    if "cc_mean" in results[0]:
+        with open(result_path / f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.txt", "a") as fp:
+            for meta in results:
+                cc_mean = meta["cc_mean"]
+                pair_index = meta["pair_index"]
+                nb, nch = cc_mean.shape
+                for i in range(nb):
+                    pair_id = pair_index[i]
+                    id1, id2 = pair_id
+                    score = ','.join([f"{x.item():.3f}" for x in cc_mean[i]])
+                    fp.write(f"{id1},{id2},{score}\n")
 
     with h5py.File(result_path / f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5", "a") as fp:
-
         for meta in results:
-
             topk_index = meta["topk_index"]
             topk_score = meta["topk_score"]
             neighbor_score = meta["neighbor_score"]
@@ -124,30 +146,44 @@ def write_cc_pairs(results, result_path, ccconfig, dim=1, rank=0, world_size=1, 
                             plt.close(fig)
                             
 
-def write_ambient_noise(results, result_path, ccconfig, dim=1, rank=0, world_size=1):
+def write_ambient_noise(results, result_path, ccconfig, rank=0, world_size=1):
+
     if not isinstance(result_path, Path):
         result_path = Path(result_path)
+
     with h5py.File(result_path / f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5", "a") as fp:
-        for result in results:
-            for i, pair_index in enumerate(result["info"]["pair_index"]):
-                if dim == 0:
-                    xcorr = result["xcorr"][i, :, :]
-                elif dim == 1:
-                    xcorr = result["xcorr"][:, i, :]
-                else:
-                    raise ValueError(f"{dim} not supported")
-                if pair_index in fp:
-                    data = fp[pair_index][:]
-                    count = fp[pair_index].attrs["count"]
-                    data = count / (count + 1) * data + np.nan_to_num(xcorr) / (count + 1)
-                    fp[pair_index][:] = data
-                    fp[pair_index].attrs["count"] = count + 1
-                else:
-                    fp.create_dataset(
-                        f"{pair_index}",
-                        data=xcorr,
-                    )
-                    fp[pair_index].attrs["count"] = 1
+        for meta in results:
+            xcorr = meta["xcorr"].cpu().numpy()
+            nb, nch, nx, nt = xcorr.shape
+            for i in range(nb):
+                data = np.squeeze(np.nan_to_num(xcorr[i, :, :, :]))
+
+                # for j, pair_id in enumerate(meta["pair_index"]):
+                for pair_id in meta["pair_index"]:
+                    list1, list2 = pair_id
+                    
+                    for j, (id1, id2) in enumerate(zip(list1, list2)):
+                        if f"{id1}/{id2}" not in fp:
+                            gp = fp.create_group(f"{id1}/{id2}")
+                            ds = gp.create_dataset("xcorr", data=data[..., j, :])
+                            ds.attrs["count"] = 1
+                        else:
+                            gp = fp[f"{id1}/{id2}"]
+                            ds = gp["xcorr"]
+                            count = ds.attrs["count"]
+                            ds[:] = count / (count + 1) * ds[:] + data[..., j, :] / (count + 1)
+                            ds.attrs["count"] = count + 1
+                        
+                        if f"{id2}/{id1}" not in fp:
+                            gp = fp.create_group(f"{id2}/{id1}")
+                            ds = gp.create_dataset("xcorr", data=np.flip(data[..., j, :], axis=-1))
+                            ds.attrs["count"] = 1
+                        else:
+                            gp = fp[f"{id2}/{id1}"]
+                            ds = gp["xcorr"]
+                            count = ds.attrs["count"]
+                            ds[:] = count / (count + 1) * ds[:] + np.flip(data[..., j, :], axis=-1) / (count + 1)
+                            ds.attrs["count"] = count + 1
 
 
 def write_xcor_data_to_h5(result, path_result, phase1="P", phase2="P"):

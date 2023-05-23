@@ -1,7 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 from tqdm import tqdm
+import numpy as np
 
 
 class CCModel(nn.Module):
@@ -23,6 +25,8 @@ class CCModel(nn.Module):
         self.domain = config.domain
         self.mccc = config.mccc
         self.use_pair_index = config.use_pair_index
+        self.pre_fft = config.pre_fft
+        self.spectral_whitening = config.spectral_whitening
         self.transforms = transforms
         self.batch_size = batch_size
         self.to_device = to_device
@@ -48,7 +52,22 @@ class CCModel(nn.Module):
             data1 = x1["data"]
             data2 = x2["data"]
 
-        if self.domain == "time":
+
+        if self.domain == "frequency":
+            # xcorr with fft in frequency domain
+            nfast = (data1.shape[-1] - 1) * 2
+            nfast = 2 ** int(math.ceil(math.log2(nfast)))
+            if not self.pre_fft:
+                data1 = torch.fft.rfft(data1, n=nfast, dim=-1)
+                data2 = torch.fft.rfft(data2, n=nfast, dim=-1)
+            if self.channel_shift != 0:
+                xcor_freq = data1 * torch.roll(torch.conj(data2), self.channel_shift, dims=-2)
+            else:
+                xcor_freq = data1 * torch.conj(data2)
+            xcor_time = torch.fft.irfft(xcor_freq, n=nfast, dim=-1)
+            xcor = torch.roll(xcor_time, nfast // 2, dims=-1)[..., nfast // 2 - self.nlag : nfast // 2 + self.nlag + 1]
+
+        elif self.domain == "time":
             ## using conv1d in time domain
             nb1, nc1, nx1, nt1 = data1.shape
             data1 = data1.view(1, nb1 * nc1 * nx1, nt1)
@@ -62,20 +81,43 @@ class CCModel(nn.Module):
                 xcor = F.conv1d(data1, data2, padding=self.nlag, groups=nb1 * nc1 * nx1)
             xcor = xcor.view(nb1, nc1, nx1, -1)
 
-        elif self.domain == "frequency":
-            # xcorr with fft in frequency domain
-            nfast = (data1.shape[-1] - 1) * 2
-            if self.channel_shift != 0:
-                xcor_freq = data1 * torch.roll(torch.conj(data2), self.channel_shift, dims=-2)
-            else:
-                xcor_freq = data1 * torch.conj(data2)
-            xcor_time = torch.fft.irfft(xcor_freq, n=nfast, dim=-1)
-            xcor = torch.roll(xcor_time, nfast // 2, dims=-1)[..., nfast // 2 - self.nlag : nfast // 2 + self.nlag + 1]
+        elif self.domain == "stft":
+            nb1, nc1, nx1, nt1 = data1.shape
+            # nb2, nc2, nx2, nt2 = data2.shape
+            data1 = data1.view(nb1 * nc1 * nx1, nt1)
+            # data2 = data2.view(nb2 * nc2 * nx2, nt2)
+            data2 = data2.view(nb1 * nc1 * nx1, nt1)
+            if not self.pre_fft:
+                data1 = torch.stft(data1, n_fft=self.nlag*2, hop_length = self.nlag, center=True, return_complex=True)
+                data2 = torch.stft(data2, n_fft=self.nlag*2, hop_length = self.nlag, center=True, return_complex=True)
+            if self.spectral_whitening:
+                # freqs = np.fft.fftfreq(self.nlag*2, d=self.dt)
+                # data1 = data1 / torch.clip(torch.abs(data1), min=1e-7) #float32 eps
+                # data2 = data2 / torch.clip(torch.abs(data2), min=1e-7)
+                data1 = torch.exp(1j * data1.angle())
+                data2 = torch.exp(1j * data2.angle())
 
-        pair_index = [(i.item(), j.item()) for i, j in zip(x1["info"]["index"], x2["info"]["index"])]
-        meta = {"xcorr": xcor, "pair_index": pair_index, 
-                "nlag": self.nlag,
-                "data1": x1["data"], "data2": x2["data"]}
+            xcor = torch.fft.irfft(torch.sum(data1 * torch.conj(data2), dim=-1), dim=-1)
+            xcor = torch.roll(xcor, self.nlag, dims=-1)
+            xcor = xcor.view(nb1, nc1, nx1, -1)
+        
+        else:
+            raise ValueError("domain should be frequency or time or stft")
+
+
+        # pair_index = [(i.item(), j.item()) for i, j in zip(x1["info"]["index"], x2["info"]["index"])]
+        pair_index = [(i, j) for i, j in zip(x1["index"], x2["index"])]
+
+        meta = {
+            "xcorr": xcor, 
+            "pair_index": pair_index, 
+            "nlag": self.nlag,
+            "data1": x1["data"], 
+            "data2": x2["data"],
+            "info1": x1["info"],
+            "info2": x2["info"],
+            }
+        
         if self.transforms is not None:
             meta = self.transforms(meta)
 

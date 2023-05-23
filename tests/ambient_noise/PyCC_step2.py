@@ -6,24 +6,25 @@ import time
 import h5py
 import numpy as np
 import pandas as pd
+from func_PyCC import *
 from tqdm import tqdm
 
-from func_PyCC import *
-
 #%% parameters
-path_preprocessed = "./preprocessed/"
+path_preprocessed = "./preprocess/"
 output_CC = "./CC/"
 if not os.path.exists(output_CC):
     os.mkdir(output_CC)
 
 # starting and ending dates to compute daily stacked CC
-dates = [x.strftime("%Y%m%d") for x in pd.date_range(start="6/15/2021", end="6/15/2021", freq="1D")]
+dates = [x.strftime("%Y%m%d") for x in pd.date_range(start="06/15/2021", end="06/15/2021", freq="1D")]
 
 # Now give the No. of channel pairs to calculate CC.
 # below is an example of common-shot
 nch = 1250
 pair_channel1 = 500 * np.ones(nch, dtype="int")
 pair_channel2 = np.arange(nch)
+# pair_channel1 = np.repeat(np.arange(0,nch,5), nch//5)
+# pair_channel2 = np.tile(np.arange(0,nch,5), nch//5)
 npair = len(pair_channel1)
 #############
 
@@ -41,18 +42,18 @@ nchunk = int(np.ceil(npair / npair_chunk))
 device = "cuda:0"  # GPU device, needs to be changed to multi
 
 #%% temporal normalization/ spectral whitening/ CC
+
+
 for idate in tqdm(dates):
-
     ccall = np.zeros((npair, int(max_lag * fs * 2 + 1)))
-
     output_file_tmp = f"{output_CC}/{idate}.npy"
-    if os.path.exists(output_file_tmp):
-        print(output_file_tmp)
-        continue
+    # if os.path.exists(output_file_tmp):
+    #     print(output_file_tmp)
+    #     continue
 
     filelist = glob.glob(os.path.join(path_preprocessed, idate + "*h5"))
     filelist.sort()
-    filelist = filelist[:1]
+    # filelist = filelist[:1]
     if len(filelist) == 0:
         print(f"{idate}: no file")
         continue
@@ -98,7 +99,7 @@ for idate in tqdm(dates):
         # print(time.time() - t1)
         # del data1, data2, cc
     if flag_mean > 0:
-        ccall /= flag_mean
+        # ccall /= flag_mean
         # print('Cross correlation of', idate, time.time() - t1)
         np.save(output_file_tmp, ccall)
 
@@ -108,16 +109,14 @@ for idate in tqdm(dates):
 import matplotlib.pyplot as plt
 
 ccall = np.load(output_file_tmp)
-vmax = np.percentile(np.abs(ccall), 99)
-plt.imshow(
-    # filter(ccall, 25, 1, 10),
-    ccall,
-    aspect="auto",
-    vmax=vmax,
-    vmin=-vmax,
-    # extent=(-max_lag, max_lag, ccall.shape[0], 0),
-    cmap="RdBu",
-)
+ccf = ccall
+# ccf = filter(ccall, 25, 1, 10)
+# vmax = np.percentile(np.abs(ccf), 99)
+vmax = np.std(ccf)
+plt.figure()
+plt.imshow(ccf, aspect="auto", vmax=vmax, vmin=-vmax, extent=(-max_lag, max_lag, ccall.shape[0], 0), cmap="RdBu")
+# plt.ylim(1000, 4000)
+# plt.xlim(-10,10)
 plt.colorbar()
-plt.savefig("cc.png", dpi=300, bbox_inches="tight")
+plt.savefig("cc.png", dpi=300)
 plt.show()
