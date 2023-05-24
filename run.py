@@ -72,6 +72,7 @@ def get_args_parser(add_help=True):
         type=int,
         help="fixed channel index, if specified, min and max are ignored",
     )
+    parser.add_argument("--temporal_gradient", action="store_true", help="use temporal gradient")
 
     # cross-correlation parameters
     parser.add_argument("--taper", action="store_true", help="taper two data window")
@@ -203,7 +204,8 @@ def main(args):
         pass
     elif args.mode == "AN":
         ## TODO add preprocess for ambient noise
-        preprocess.append(TemporalGradient(ccconfig.fs))
+        if args.temporal_gradient: ## convert to strain rate
+            preprocess.append(TemporalGradient(ccconfig.fs))
         preprocess.append(TemporalMovingNormalization(int(30*ccconfig.fs))) #30s for 25Hz
         preprocess.append(Filtering(ccconfig.fmin, ccconfig.fmax, ccconfig.fs, ccconfig.ftype, ccconfig.alpha, ccconfig.dtype, ccconfig.transform_device)) #50Hz
         preprocess.append(Decimation(ccconfig.decimate_factor)) #25Hz

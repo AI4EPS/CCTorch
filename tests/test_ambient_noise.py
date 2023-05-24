@@ -5,111 +5,60 @@ import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
+from tqdm.auto import tqdm
+
+
+def get_args_parser(add_help=True):
+
+    import argparse
+    parser = argparse.ArgumentParser(description="Read CCTorch Results", add_help=add_help)
+    parser.add_argument("--result_path", type=str, default="results", help="path to results")
+    parser.add_argument("--figure_path", type=str, default="figures", help="path to figures")
+    parser.add_argument(
+        "--fixed_channels",
+        nargs="+",
+        default=None,
+        type=int,
+        help="fixed channel index, if specified, min and max are ignored",
+    )
+    return parser
 
 # %%
 if __name__ == "__main__":
 
-    # %%
-    # result_path = Path("../results")
-    # figure_path = Path("figures")
-    # result_path = Path("../results_decompressed_100")
-    # figure_path = Path("figures_decompressed_100")
-
-    result_path = Path("../results")
-    figure_path = Path("../figures")
-
-    # result_path = Path("../results_bak")
-    # figure_path = Path("../figures_bak")
-
-    # result_path = Path("./results_decompressed_100")
-    # figure_path = Path("./tests/figures_decompressed_100")
-
-    # result_path = Path("../results_compressed_jpeg")
-    # figure_path = Path("figures_compressed_jpeg")
-
-    # result_path = Path("results_compressed_jpeg_500")
-    # figure_path = Path("./tests/figures_compressed_jpeg_500")
-
-    # result_path = Path("./results_decompressed")
-    # figure_path = Path("./tests/figures_decompressed")
-    # result_path = Path("./results_decompressed")
-    # figure_path = Path("./tests/figures_decompressed")
-
+    args = get_args_parser().parse_args()
+    
+    result_path = Path(args.result_path)
+    figure_path = Path(args.figure_path)
     if not figure_path.exists():
         figure_path.mkdir(parents=True)
 
+    channels = args.fixed_channels
+
+    h5_files = sorted(result_path.glob("*.h5"))
+    print(f"{len(h5_files)} hdf5 files found")
+
     tmp = []
-    # first_channels = [300, 500, 700, 900]
-    first_channels = [500]
-    with h5py.File(result_path / "AN_000_001.h5", "r") as fp:
-        # pair_index = list(f.keys())
-        # pair_index = pd.DataFrame(pair_index, columns=["pair_index"])
-        # pair_index[["id1", "id2"]] = pair_index["pair_index"].apply(lambda x: pd.Series(x.split("_")))
-        # pair_index["id1"] = pair_index["id1"].astype(int)
-        # pair_index["id2"] = pair_index["id2"].astype(int)
-        # pair_index.sort_values(by=["id1", "id2"], inplace=True)
-        for chn in first_channels:
-            # second_channels = sorted([int(x.split("/")[-1]) for x in fp[f"/{chn}"].keys()])
-            data = []
-            index = []
-            for c in sorted(fp[f"/{chn}"].keys(), key=lambda x: int(x.split("/")[-1])):
-                data.append(fp[f"/{chn}/{c}"]["xcorr"][:])
-                index.append(c)
+    for ch1 in channels:
+        data = []
+        index = []
+        for h5_file in h5_files:
+            with h5py.File(h5_file, "r") as fp:
+                ch2 = sorted([int(x) for x in fp[f"/{ch1}"].keys()])
+                for c in ch2:
+                    data.append(fp[f"/{ch1}/{c}"]["xcorr"][:])
+                    index.append(c)
 
-        # for id1 in tqdm(pair_index["id1"].unique()):
-        #     data = []
-        #     for key in pair_index[pair_index["id1"] == id1]["pair_index"]:
-        #         data.append(f[key][:])
-        #     data = np.concatenate(data)
+        index = np.array(index)
+        data = np.stack(data)
+        sorted_idx = np.argsort(index)
+        index = index[sorted_idx]
+        data = data[sorted_idx]
 
-            data = np.stack(data)
-            # fig, axes = plt.subplots(1, 1)
-            plt.figure()
-            vmax = np.std(data)
-            plt.imshow(data, vmin=-vmax, vmax=vmax, aspect="auto", cmap="RdBu")
-            plt.colorbar()
-            plt.savefig(figure_path / f"result_{chn}.png", dpi=300)
+        
+        plt.figure()
+        vmax = np.std(data)
+        plt.imshow(data, vmin=-vmax, vmax=vmax, aspect="auto", cmap="RdBu")
+        plt.colorbar()
+        plt.savefig(figure_path / f"result_{ch1}.png", dpi=300, bbox_inches="tight")
 
-        # for i in range(1250):
-        #     for j in [500]:
-        #         pair_index = f"{i}_{j}"
-        #         if pair_index in f:
-        #             tmp.append(f[pair_index][:])
-    # xcorr = np.array(tmp)
-    # xcorr = xcorr.transpose(1, 0, 2)
-    # print(xcorr.shape)
-    # # raise
-
-    # plt.figure()
-    # # vmax = np.max(np.abs(xcorr[0, :, :]))
-    # _, nch, nt = xcorr.shape
-    # # xcorr[0, :, nt // 2 - 10 : nt // 2 + 11] *= 0.0
-    # # vmax = np.std(xcorr[0, :, :])
-    # mask = np.ones(nt)
-    # mask[nt // 2 - 10 : nt // 2 + 11] = 0.0
-    # # xcorr[0, :, nt // 2 - 10 : nt // 2 + 11] *= 0.0
-    # vmax = np.std(xcorr[0, :, mask == 1.0]) * 3
-    # plt.imshow(xcorr[0, :, :], cmap="seismic", vmax=vmax, vmin=-vmax)
-    # plt.colorbar()
-    # plt.savefig("xcorr.png", dpi=300)
-    # ## TODO: cleanup writting
-
-    # plt.figure()
-    # ccall = xcorr[0, :, :]
-    # max_lag = 30
-    # vmax = np.percentile(np.abs(ccall), 99)
-    # plt.imshow(
-    #     # filter(ccall, 25, 1, 10),
-    #     ccall,
-    #     aspect="auto",
-    #     vmax=vmax,
-    #     vmin=-vmax,
-    #     # extent=(-max_lag, max_lag, ccall.shape[0], 0),
-    #     cmap="RdBu",
-    # )
-    # plt.colorbar()
-    # plt.savefig("test_no_whitening_no_filtering.png", dpi=300)
-    # plt.show()
-
-# %%

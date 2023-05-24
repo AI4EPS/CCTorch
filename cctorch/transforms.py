@@ -136,7 +136,6 @@ class Filtering(torch.nn.Module):
 
     def forward(self, data):
 
-        print(f"{data.dtype}, {data.device}")
         data = data - torch.mean(data, dim=-1, keepdim=True)
         max_, _ = torch.max(torch.abs(data), dim=-1, keepdim=True)
         max_[max_ == 0.0] = 1.0
