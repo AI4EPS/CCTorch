@@ -55,7 +55,7 @@ if __name__ == "__main__":
         index = index[sorted_idx]
         data = data[sorted_idx]
 
-        
+        np.savez(figure_path / f"result_{ch1}.npz", data=data, index=index)
         plt.figure()
         vmax = np.std(data)
         plt.imshow(data, vmin=-vmax, vmax=vmax, aspect="auto", cmap="RdBu")
