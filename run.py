@@ -183,9 +183,9 @@ def main(args):
     if (rank == 0):
         if os.path.exists(args.result_path):
             print(f"Remove existing result path: {args.result_path}")
-            if os.path.exists(args.result_path + "_backup"):
-                shutil.rmtree(args.result_path + "_backup")
-            shutil.move(args.result_path, args.result_path + "_backup")
+            if os.path.exists(args.result_path.rstrip("/") + "_backup"):
+                shutil.rmtree(args.result_path.rstrip("/") + "_backup")
+            shutil.move(args.result_path.rstrip("/"), args.result_path.rstrip("/") + "_backup")
         os.makedirs(args.result_path)
 
     preprocess = []

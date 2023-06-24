@@ -9,7 +9,7 @@ from multiprocessing import shared_memory
 from multiprocessing.pool import Pool, ThreadPool
 from pathlib import Path
 
-import gamma
+# import gamma
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
