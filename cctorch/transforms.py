@@ -7,15 +7,71 @@ from scipy.signal import tukey
 from scipy.sparse.linalg import lsmr
 from tqdm import tqdm
 import torchaudio
+from datetime import datetime, timezone, timedelta
+
+
+#### Common ####
+class Filtering(torch.nn.Module):
+    def __init__(self, fmin, fmax, fs, ftype="bandpass", alpha=0.01, dtype=torch.float32, device="cpu"):
+        super().__init__()
+        self.f1 = fmin
+        self.f2 = fmax
+        self.fs = fs
+        self.alpha = alpha
+        if ftype == "bandpass":
+            b, a = scipy.signal.butter(2, [fmin, fmax], ftype, fs=fs)
+        elif ftype == "highpass":
+            b, a = scipy.signal.butter(2, fmin, ftype, fs=fs)
+        elif ftype == "lowpass":
+            b, a = scipy.signal.butter(2, fmax, ftype, fs=fs)
+        else:
+            raise ValueError("Unknown filter type")
+        self.a = torch.tensor(a, dtype=dtype).to(device)
+        self.b = torch.tensor(b, dtype=dtype).to(device)
+
+    def forward(self, data):
+        data = data - torch.mean(data, dim=-1, keepdim=True)
+        max_, _ = torch.max(torch.abs(data), dim=-1, keepdim=True)
+        max_[max_ == 0.0] = 1.0
+        data = data / max_
+
+        # data = data - (torch.linspace(0, 1, data.shape[-1], device=data.device, dtype=data.dtype)
+        #                * (data[..., -1, None] - data[..., 0, None]) + data[..., 0, None])
+
+        taper = tukey(data.shape[-1], self.alpha * 3000 / data.shape[-1])  ## relative to 3000 samples
+        # taper = tukey(data.shape[-1], self.alpha)
+        data = data * torch.tensor(taper, device=data.device, dtype=data.dtype)
+
+        data = torchaudio.functional.filtfilt(data, a_coeffs=self.a, b_coeffs=self.b, clamp=False) * max_
+
+        return data
+
+
+class Reduction(torch.nn.Module):
+    def __init__(self, mode="reduce_x"):
+        super().__init__()
+        self.mode = mode
+
+    def forward(self, meta):
+        if self.mode == "reduce_x":
+            ccmean = torch.mean(torch.max(torch.abs(meta["xcorr"]), dim=-1).values, dim=-1)
+            meta["cc_mean"] = ccmean
+        else:
+            raise NotImplementedError
+
+        return meta
 
 
 ##### Ambient Noise ######
 
+
 def remove_temporal_mean(data):
     return data - torch.mean(data, dim=-1, keepdim=True)
 
+
 def remove_spatial_median(data):
     return data - torch.median(data, dim=-2, keepdim=True)[0]
+
 
 # def temporal_gradient(data):
 #     return torch.gradient(data, dim=-1)[0]
@@ -27,6 +83,7 @@ class TemporalGradient(torch.nn.Module):
     def forward(self, data):
         return torch.gradient(data, dim=-1)[0] * self.fs
 
+
 class Decimation(torch.nn.Module):
     def __init__(self, decimation=2):
         super().__init__()
@@ -35,13 +92,13 @@ class Decimation(torch.nn.Module):
     def forward(self, data):
         return data[..., :: self.decimation]
 
+
 class TemporalMovingNormalization(torch.nn.Module):
     def __init__(self, window_size=64):
         super().__init__()
         self.window_size = window_size
 
     def forward(self, data):
-
         nb, nc, nx, nt = data.shape
         moving_mean = F.avg_pool2d(
             data,
@@ -77,8 +134,6 @@ class TemporalMovingNormalization(torch.nn.Module):
 
 
 ##### Cross-Correlation ######
-
-
 class DetectPeaks(torch.nn.Module):
     def __init__(self, vmin=0.3, kernel=3, stride=1, K=3):
         super().__init__()
@@ -88,7 +143,6 @@ class DetectPeaks(torch.nn.Module):
         self.K = K
 
     def forward(self, meta):
-
         xcorr = meta["xcorr"]
         if "nlag" in meta:
             nlag = meta["nlag"]
@@ -116,61 +170,64 @@ class DetectPeaks(torch.nn.Module):
         return meta
 
 
-class Filtering(torch.nn.Module):
-    def __init__(self, fmin, fmax, fs, ftype="bandpass", alpha=0.01, dtype=torch.float32, device="cpu"):
+## Template Matching
+class DetectTM(torch.nn.Module):
+    def __init__(self, ratio=10, maxpool_kernel=101, median_kernel=6000, K=100, sampling_rate=100.0):
         super().__init__()
-        self.f1 = fmin
-        self.f2 = fmax
-        self.fs = fs
-        self.alpha = alpha
-        if ftype == "bandpass":
-            b, a = scipy.signal.butter(2, [fmin, fmax], ftype, fs=fs)
-        elif ftype == "highpass":
-            b, a = scipy.signal.butter(2, fmin, ftype, fs=fs)
-        elif ftype == "lowpass":
-            b, a = scipy.signal.butter(2, fmax, ftype, fs=fs)
-        else:
-            raise ValueError("Unknown filter type")
-        self.a = torch.tensor(a, dtype=dtype).to(device)
-        self.b = torch.tensor(b, dtype=dtype).to(device)
+        self.ratio = ratio
+        self.maxpool_kernel = maxpool_kernel
+        self.maxpool_stride = 1
+        self.median_kernel = median_kernel
+        self.median_stride = median_kernel // 2
+        self.K = K
+        self.sampling_rate = sampling_rate
 
-    def forward(self, data):
-
-        data = data - torch.mean(data, dim=-1, keepdim=True)
-        max_, _ = torch.max(torch.abs(data), dim=-1, keepdim=True)
-        max_[max_ == 0.0] = 1.0
-        data = data / max_
-
-        # data = data - (torch.linspace(0, 1, data.shape[-1], device=data.device, dtype=data.dtype)
-        #                * (data[..., -1, None] - data[..., 0, None]) + data[..., 0, None])
-
-        taper = tukey(data.shape[-1], self.alpha*3000/data.shape[-1]) ## relative to 3000 samples
-        # taper = tukey(data.shape[-1], self.alpha)
-        data = data * torch.tensor(taper, device=data.device, dtype=data.dtype)
-
-        data = torchaudio.functional.filtfilt(data, a_coeffs=self.a, b_coeffs=self.b, clamp=False) * max_
-
-        return data
-
-
-class Reduction(torch.nn.Module):
-    def __init__(self, mode="reduce_x"):
-
-        super().__init__()
-        self.mode = mode
+    def convert(self, topk_score, topk_inds, begin_time):
+        nb, nc, nx, nk = topk_score.shape
+        event_time = []
+        event_score = []
+        for i in range(nb):
+            for j in range(nc):
+                for k in range(nx):
+                    for l in range(nk):
+                        if topk_score[i, j, k, l] > 0:
+                            event_time.append(
+                                begin_time[i] + timedelta(seconds=topk_inds[i, j, k, l].item() / self.sampling_rate)
+                            )
+                            event_score.append(topk_score[i, j, k, l].item())
+        return event_time, event_score
 
     def forward(self, meta):
+        scores = meta["xcorr"]
 
-        if self.mode == "reduce_x":
-            ccmean = torch.mean(torch.max(torch.abs(meta["xcorr"]), dim=-1).values, dim=-1)
-            meta["cc_mean"] = ccmean
+        nb, nc, nx, nt = scores.shape
+        smax = F.max_pool2d(
+            scores, (1, self.maxpool_kernel), stride=(1, self.maxpool_stride), padding=(0, self.maxpool_kernel // 2)
+        )[:, :, :, :nt]
+        scores_ = F.pad(scores, (0, self.median_kernel, 0, 0), mode="reflect", value=0)
+        ## MAD = median(|x_i - median(x)|)
+        unfolded = scores_.unfold(-1, self.median_kernel, self.median_stride)
+        mad = (unfolded - unfolded.median(dim=-1, keepdim=True).values).abs().median(dim=-1).values
+        mad = F.interpolate(mad, scale_factor=(1, self.median_stride), mode="bilinear", align_corners=False)[
+            :, :, :, :nt
+        ]
+        keep = (smax == scores).float() * (scores > self.ratio * mad).float()
+        scores = scores * keep
+
+        if self.K == 0:
+            K = max(round(nt * 10.0 / 3000.0), 3)
         else:
-            raise NotImplementedError
+            K = self.K
+        topk_scores, topk_inds = torch.topk(scores, K, dim=-1, sorted=True)
+
+        event_time, event_score = self.convert(topk_scores, topk_inds, meta["info1"]["begin_time"])
+        meta["event_time"] = event_time
+        meta["event_score"] = event_score
 
         return meta
 
 
-##############################################
+############################################## Old Func ##############################################
 
 
 def xcorr_lag(nt):

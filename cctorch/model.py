@@ -20,6 +20,7 @@ class CCModel(nn.Module):
         self.nlag = config.nlag
         self.nma = config.nma
         self.channel_shift = config.channel_shift
+
         self.reduce_t = config.reduce_t
         self.reduce_x = config.reduce_x
         self.domain = config.domain
@@ -31,6 +32,10 @@ class CCModel(nn.Module):
         self.batch_size = batch_size
         self.to_device = to_device
         self.device = device
+
+        # TM
+        self.shift_t = config.shift_t
+        self.normalize = config.normalize
 
     def forward(self, x):
         """Perform cross-correlation on input data
@@ -52,7 +57,6 @@ class CCModel(nn.Module):
             data1 = x1["data"]
             data2 = x2["data"]
 
-
         if self.domain == "frequency":
             # xcorr with fft in frequency domain
             nfast = (data1.shape[-1] - 1) * 2
@@ -70,16 +74,37 @@ class CCModel(nn.Module):
         elif self.domain == "time":
             ## using conv1d in time domain
             nb1, nc1, nx1, nt1 = data1.shape
-            data1 = data1.view(1, nb1 * nc1 * nx1, nt1)
             nb2, nc2, nx2, nt2 = data2.shape
-            data2 = data2.view(nb2 * nc2 * nx2, 1, nt2)
-            if self.channel_shift != 0:
-                xcor = F.conv1d(
-                    data1, torch.roll(data2, self.channel_shift, dims=-2), padding=self.nlag, groups=nb1 * nc1 * nx1
+
+            if self.shift_t:
+                nt_index = torch.arange(nt1).unsqueeze(0).unsqueeze(0).unsqueeze(0)
+
+                shift_index = x2["info"]["shift_index"]
+                shift_index = shift_index.repeat_interleave(
+                    3, dim=1
+                )  # repeat to match three channels for P and S wave templates
+                shift_index = (nt_index + shift_index.unsqueeze(-1)) % nt1
+                data1 = data1.gather(-1, shift_index)
+
+            if self.normalize:
+                data2 = (data2 - torch.mean(data2, dim=-1, keepdim=True)) / (
+                    torch.std(data2, dim=-1, keepdim=True) + torch.finfo(data1.dtype).eps
                 )
-            else:
-                xcor = F.conv1d(data1, data2, padding=self.nlag, groups=nb1 * nc1 * nx1)
+
+            data1 = data1.view(1, nb1 * nc1 * nx1, nt1)
+            data2 = data2.view(nb2 * nc2 * nx2, 1, nt2)
+            xcor = F.conv1d(data1, data2, padding=self.nlag, stride=1, groups=nb1 * nc1 * nx1)
+
+            if self.normalize:
+                data1_ = F.pad(data1, (nt2 // 2, nt2 - 1 - nt2 // 2), mode="reflect")
+                local_mean = F.avg_pool1d(data1_, nt2, stride=1)
+                local_std = F.lp_pool1d(data1 - local_mean, norm_type=2, kernel_size=nt2, stride=1) * np.sqrt(nt2)
+                xcor = xcor / (local_std + torch.finfo(data1.dtype).eps)
+
             xcor = xcor.view(nb1, nc1, nx1, -1)
+
+            if self.reduce_x:
+                xcor = torch.sum(xcor, dim=(-3, -2), keepdim=True)
 
         elif self.domain == "stft":
             nb1, nc1, nx1, nt1 = data1.shape
@@ -88,8 +113,8 @@ class CCModel(nn.Module):
             # data2 = data2.view(nb2 * nc2 * nx2, nt2)
             data2 = data2.view(nb1 * nc1 * nx1, nt1)
             if not self.pre_fft:
-                data1 = torch.stft(data1, n_fft=self.nlag*2, hop_length = self.nlag, center=True, return_complex=True)
-                data2 = torch.stft(data2, n_fft=self.nlag*2, hop_length = self.nlag, center=True, return_complex=True)
+                data1 = torch.stft(data1, n_fft=self.nlag * 2, hop_length=self.nlag, center=True, return_complex=True)
+                data2 = torch.stft(data2, n_fft=self.nlag * 2, hop_length=self.nlag, center=True, return_complex=True)
             if self.spectral_whitening:
                 # freqs = np.fft.fftfreq(self.nlag*2, d=self.dt)
                 # data1 = data1 / torch.clip(torch.abs(data1), min=1e-7) #float32 eps
@@ -100,29 +125,27 @@ class CCModel(nn.Module):
             xcor = torch.fft.irfft(torch.sum(data1 * torch.conj(data2), dim=-1), dim=-1)
             xcor = torch.roll(xcor, self.nlag, dims=-1)
             xcor = xcor.view(nb1, nc1, nx1, -1)
-        
+
         else:
             raise ValueError("domain should be frequency or time or stft")
-
 
         # pair_index = [(i.item(), j.item()) for i, j in zip(x1["info"]["index"], x2["info"]["index"])]
         pair_index = [(i, j) for i, j in zip(x1["index"], x2["index"])]
 
         meta = {
-            "xcorr": xcor, 
-            "pair_index": pair_index, 
+            "xcorr": xcor,
+            "pair_index": pair_index,
             "nlag": self.nlag,
-            "data1": x1["data"], 
+            "data1": x1["data"],
             "data2": x2["data"],
             "info1": x1["info"],
             "info2": x2["info"],
-            }
-        
+        }
+
         if self.transforms is not None:
             meta = self.transforms(meta)
 
         return meta
-
 
     def forward_map(self, x):
         """Perform cross-correlation on input data (dataset_type == map)
@@ -141,7 +164,6 @@ class CCModel(nn.Module):
         num_pairs = pair_index.shape[0]
 
         for i in tqdm(range(0, num_pairs, self.batch_size)):
-
             c1 = pair_index[i : i + self.batch_size, 0]
             c2 = pair_index[i : i + self.batch_size, 1]
             if len(c1) == 1:  ## returns a view of the original tensor

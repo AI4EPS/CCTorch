@@ -73,7 +73,7 @@ for ista in range(template.shape[2]):
     plt.plot(normalize(template[ieve, ich + 3, ista, :]) / 3 + ista + shift, "r", linewidth=0.5)
 plt.show()
 
-# %% Load continous waveform
+# %% Load continuous waveform
 year = "2019"
 jday = "185"
 hour = "17"
@@ -152,9 +152,9 @@ shift_index = shift_index[:, :, :]
 nb1, nc1, nx1, nt1 = data1.shape
 nb2, nc2, nx2, nt2 = data2.shape
 
-## shift continous waveform to align with template time
+## shift continuous waveform to align with template time
 nt_index = torch.arange(nt1).unsqueeze(0).unsqueeze(0).unsqueeze(0)
-adjusted_index = (nt_index + shift_index.unsqueeze(-1)) % nt
+adjusted_index = (nt_index + shift_index.unsqueeze(-1)) % nt1
 data1 = data1.gather(-1, adjusted_index)
 
 device = "cpu"

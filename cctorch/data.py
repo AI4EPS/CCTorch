@@ -11,6 +11,7 @@ from torch.utils.data import Dataset, IterableDataset
 import itertools
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+import obspy
 
 
 class CCDataset(Dataset):
@@ -20,8 +21,10 @@ class CCDataset(Dataset):
         pair_list=None,
         data_list1=None,
         data_list2=None,
-        data_path="./",
-        data_format="h5",
+        data_path1="./",
+        data_path2="./",
+        data_format1="h5",
+        data_format2="h5",
         block_size1=1,
         block_size2=1,
         device="cpu",
@@ -55,13 +58,14 @@ class CCDataset(Dataset):
         self.group1 = [list(x) for x in np.array_split(self.data_list1, block_num1) if len(x) > 0]
         self.group2 = [list(x) for x in np.array_split(self.data_list2, block_num2) if len(x) > 0]
         self.block_index = generate_block_index(self.group1, self.group2, self.pair_list)
-        self.data_path = Path(data_path)
-        self.data_format = data_format
+        self.data_path1 = Path(data_path1)
+        self.data_path2 = Path(data_path2)
+        self.data_format1 = data_format1
+        self.data_format2 = data_format2
         self.transforms = transforms
         self.device = device
 
     def __getitem__(self, idx):
-
         i, j = self.block_index[idx]
         event1, event2 = self.group1[i], self.group2[j]
 
@@ -73,14 +77,14 @@ class CCDataset(Dataset):
                     continue
 
                 if event1[ii] not in index_dict:
-                    data_dict = read_data(event1[ii], self.data_path, self.data_format)
+                    data_dict = read_data(event1[ii], self.data_path1, self.data_format1)
                     data.append(torch.tensor(data_dict["data"]))
                     info.append(data_dict["info"])
                     index_dict[event1[ii]] = len(data) - 1
                 idx1 = index_dict[event1[ii]]
 
                 if event2[jj] not in index_dict:
-                    data_dict = read_data(event2[jj], self.data_path, self.data_format)
+                    data_dict = read_data(event2[jj], self.data_path2, self.data_format2)
                     data.append(torch.tensor(data_dict["data"]))
                     info.append(data_dict["info"])
                     index_dict[event2[jj]] = len(data) - 1
@@ -111,8 +115,10 @@ class CCIterableDataset(IterableDataset):
         pair_list=None,
         data_list1=None,
         data_list2=None,
-        data_path="./",
-        data_format="h5",
+        data_path1="./",
+        data_path2="./",
+        data_format1="h5",
+        data_format2="h5",
         block_size1=1,
         block_size2=1,
         dtype=torch.float32,
@@ -131,29 +137,52 @@ class CCIterableDataset(IterableDataset):
         self.config = config
         self.block_size1 = block_size1
         self.block_size2 = block_size2
-        self.data_path = Path(data_path)
-        self.data_format = data_format
+        self.data_path1 = Path(data_path1)
+        self.data_path2 = Path(data_path2)
+        self.data_format1 = data_format1
+        self.data_format2 = data_format2
         self.transforms = transforms
         self.batch_size = batch_size
         self.device = device
         self.dtype = dtype
         self.num_batch = None
+        self.symmetric = True if self.mode == "CC" else False
 
         if self.mode == "AN":
-             ## For ambient noise, we split chunks in the sampling function
+            ## For ambient noise, we split chunks in the sampling function
             self.data_list1 = self.data_list1[rank::world_size]
         else:
             block_num1 = int(np.ceil(len(self.data_list1) / block_size1))
             block_num2 = int(np.ceil(len(self.data_list2) / block_size2))
             self.group1 = [list(x) for x in np.array_split(self.data_list1, block_num1) if len(x) > 0]
             self.group2 = [list(x) for x in np.array_split(self.data_list2, block_num2) if len(x) > 0]
-            self.block_index = generate_block_index(self.group1, self.group2, auto_xcorr=config.auto_xcorr, pair_list=self.pair_list, min_sample_per_block=1)[rank::world_size]
+            self.block_index = generate_block_index(
+                self.group1,
+                self.group2,
+                auto_xcorr=config.auto_xcorr,
+                pair_list=self.pair_list,
+                symmetric=self.symmetric,
+                min_sample_per_block=1,
+            )[rank::world_size]
 
-        if self.data_format == "memmap":
-            self.ndarray = np.memmap(self.data_path, dtype=np.float32, mode="r", shape=tuple(config.template_shape))
+        if (self.data_format1 == "memmap") or (self.data_format2 == "memmap"):
+            self.templates = np.memmap(
+                config.template_file,
+                dtype=np.float32,
+                mode="r",
+                shape=tuple(config.template_shape),
+            )
+            self.traveltime_index = np.memmap(
+                config.traveltime_index_file,
+                dtype=np.int32,
+                mode="r",
+                shape=tuple(config.traveltime_shape),
+            )
+            config.stations = pd.read_csv(
+                config.station_index_file, header=None, names=["index", "station_id", "component"], index_col=0
+            )
 
     def __iter__(self):
-
         worker_info = torch.utils.data.get_worker_info()
         if worker_info is None:
             num_workers = 1
@@ -167,9 +196,7 @@ class CCIterableDataset(IterableDataset):
         else:
             return iter(self.sample(self.block_index[worker_id::num_workers]))
 
-
     def init_pairs(self, pair_list, data_list1, data_list2, config):
-
         if data_list1 is not None:
             data_list1 = pd.unique(pd.read_csv(data_list1, header=None)[0]).tolist()
 
@@ -183,28 +210,29 @@ class CCIterableDataset(IterableDataset):
 
         return pair_list, data_list1, data_list2
 
-
     def sample(self, block_index):
-
         for i, j in block_index:
             local_dict = {}
             event1, event2 = self.group1[i], self.group2[j]
-            pairs = generate_pairs(event1, event2, self.config.auto_xcorr)
+            pairs = generate_pairs(event1, event2, self.config.auto_xcorr, self.symmetric)
             data1, index1, info1, data2, index2, info2 = [], [], [], [], [], []
             num = 0
 
-            for (ii, jj) in pairs:
-
+            for ii, jj in pairs:
                 if self.pair_list is not None:
-
                     if (ii, jj) not in self.pair_list:
                         continue
 
                 if ii not in local_dict:
-                    if self.data_format == "memmap":
-                        meta1 = {"data": self.ndarray[ii], "index":ii, "info": {}}
+                    if self.data_format1 == "memmap":
+                        meta1 = {
+                            "data": self.templates[ii],
+                            "index": ii,
+                            "info": {"shift_index": self.traveltime_index[ii]},
+                        }
                     else:
-                        meta1 = read_data(ii, self.data_path, self.data_format)
+                        meta1 = read_data(ii, self.data_path1, self.data_format1, mode=self.mode, config=self.config)
+                        meta1["index"] = ii
                     data = torch.tensor(meta1["data"], dtype=self.dtype).to(self.device)
                     if self.transforms is not None:
                         data = self.transforms(data)
@@ -215,10 +243,15 @@ class CCIterableDataset(IterableDataset):
                     meta1 = local_dict[ii]
 
                 if jj not in local_dict:
-                    if self.data_format == "memmap":
-                        meta2 = {"data": self.ndarray[jj], "index": jj, "info": {}}
+                    if self.data_format2 == "memmap":
+                        meta2 = {
+                            "data": self.templates[jj],
+                            "index": jj,
+                            "info": {"shift_index": self.traveltime_index[jj]},
+                        }
                     else:
-                        meta2 = read_data(jj, self.data_path, self.data_format)
+                        meta2 = read_data(jj, self.data_path2, self.data_format2, mode=self.mode, config=self.config)
+                        meta2["index"] = jj
                     data = torch.tensor(meta2["data"], dtype=self.dtype).to(self.device)
                     if self.transforms is not None:
                         data = self.transforms(data)
@@ -237,14 +270,31 @@ class CCIterableDataset(IterableDataset):
 
                 num += 1
                 if num == self.batch_size:
-                    
                     data_batch1 = torch.stack(data1)
                     data_batch2 = torch.stack(data2)
-                    # info_batch1 = {k: [x[k] for x in info1] for k in info1[0].keys()}
-                    # info_batch2 = {k: [x[k] for x in info2] for k in info2[0].keys()}
-                    # yield {"data": data_batch1, "info": info_batch1}, {"data": data_batch2, "info": info_batch2}
-                    yield {"data": data_batch1, "index": index1, "info": info1}, {"data": data_batch2, "index": index2, "info": info2}
-                    
+                    if (
+                        (self.mode == "TM")
+                        and (data_batch2.shape[1] != data_batch1.shape[1])
+                        and (data_batch2.shape[1] % data_batch1.shape[1] == 0)
+                    ):
+                        data_batch1 = data_batch1.repeat(1, data_batch2.shape[1] // data_batch1.shape[1], 1, 1)
+
+                    info_batch1 = {k: [x[k] for x in info1] for k in info1[0].keys()}
+                    info_batch2 = {k: [x[k] for x in info2] for k in info2[0].keys()}
+                    if "shift_index" in info_batch1:
+                        info_batch1["shift_index"] = torch.tensor(
+                            np.stack(info_batch1["shift_index"]), dtype=torch.int64
+                        )
+                    if "shift_index" in info_batch2:
+                        info_batch2["shift_index"] = torch.tensor(
+                            np.stack(info_batch2["shift_index"]), dtype=torch.int64
+                        )
+                    yield {"data": data_batch1, "index": index1, "info": info_batch1}, {
+                        "data": data_batch2,
+                        "index": index2,
+                        "info": info_batch2,
+                    }
+
                     num = 0
                     data1, index1, info1, data2, index2, info2 = [], [], [], [], [], []
 
@@ -252,19 +302,29 @@ class CCIterableDataset(IterableDataset):
             if num > 0:
                 data_batch1 = torch.stack(data1)
                 data_batch2 = torch.stack(data2)
-                # info_batch1 = {k: [x[k] for x in info1] for k in info1[0].keys()}
-                # info_batch2 =  {k: [x[k] for x in info2] for k in info2[0].keys()}
-                
-                # yield {"data": data_batch1, "info": info_batch1}, {"data": data_batch2, "info": info_batch2}
-                yield {"data": data_batch1,"index": index1, "info": info1}, {"data": data_batch2, "index": index2, "info": info2}
+                if (
+                    (self.mode == "TM")
+                    and (data_batch2.shape[1] != data_batch1.shape[1])
+                    and (data_batch2.shape[1] % data_batch1.shape[1] == 0)
+                ):
+                    data_batch1 = data_batch1.repeat(1, data_batch2.shape[1] // data_batch1.shape[1], 1, 1)
+                info_batch1 = {k: [x[k] for x in info1] for k in info1[0].keys()}
+                info_batch2 = {k: [x[k] for x in info2] for k in info2[0].keys()}
+                if "shift_index" in info_batch1:
+                    info_batch1["shift_index"] = torch.tensor(np.stack(info_batch1["shift_index"]), dtype=torch.int64)
+                if "shift_index" in info_batch2:
+                    info_batch2["shift_index"] = torch.tensor(np.stack(info_batch2["shift_index"]), dtype=torch.int64)
+                yield {"data": data_batch1, "index": index1, "info": info_batch1}, {
+                    "data": data_batch2,
+                    "index": index2,
+                    "info": info_batch2,
+                }
 
     def sample_ambient_noise(self, data_list):
-
         for fd in data_list:
-
-            meta = read_data(fd, self.data_path, self.data_format, mode=self.mode)  # (nch, nt)
+            meta = read_data(fd, self.data_path1, self.data_format1, mode=self.mode)  # (nch, nt)
             data = meta["data"].float().unsqueeze(0).unsqueeze(0)  # (1, 1, nx, nt)
-            
+
             if (self.config.transform_on_file) and (self.transforms is not None):
                 data = self.transforms(data)
 
@@ -293,7 +353,7 @@ class CCIterableDataset(IterableDataset):
                 )
             else:
                 ## using delta_channel to down-sample channels needed for ambient noise
-                ## using min_channel and max_channel to selected channels that are within a range 
+                ## using min_channel and max_channel to selected channels that are within a range
                 lists_1 = range(min_channel, max_channel, self.config.delta_channel)
             lists_2 = range(min_channel, max_channel, self.config.delta_channel)
             block_num1 = int(np.ceil(len(lists_1) / self.block_size1))
@@ -316,18 +376,19 @@ class CCIterableDataset(IterableDataset):
 
                 data_i = data[:, :, index_i, :].to(self.device)
                 data_j = data[:, :, index_j, :].to(self.device)
-                
+
                 if (self.config.transform_on_batch) and (self.transforms is not None):
                     data_i = self.transforms(data_i)
                     data_j = self.transforms(data_j)
 
-                yield {"data": data_i, "index": [index_i], "info": {},},  {"data": data_j, "index": [index_j], "info": {}}
-
+                yield {
+                    "data": data_i,
+                    "index": [index_i],
+                    "info": {},
+                }, {"data": data_j, "index": [index_j], "info": {}}
 
     def __len__(self):
-
         if self.num_batch is None:
-
             worker_info = torch.utils.data.get_worker_info()
             if worker_info is None:
                 num_workers = 1
@@ -344,15 +405,13 @@ class CCIterableDataset(IterableDataset):
 
         return self.num_batch
 
-        
-
     def count_sample(self, num_workers, worker_id):
         num_samples = 0
         for i, j in tqdm(self.block_index[worker_id::num_workers], desc="Counting batches"):
             event1, event2 = self.group1[i], self.group2[j]
-            pairs = generate_pairs(event1, event2, self.config.auto_xcorr)
+            pairs = generate_pairs(event1, event2, self.config.auto_xcorr, self.symmetric)
             if self.pair_list is None:
-                num_samples += (len(pairs)-1)//self.batch_size + 1
+                num_samples += (len(pairs) - 1) // self.batch_size + 1
             else:
                 tmp = 0
                 for pair in pairs:
@@ -365,13 +424,10 @@ class CCIterableDataset(IterableDataset):
                     num_samples += 1
         return num_samples
 
-
     def count_sample_ambient_noise(self, num_workers, worker_id):
-
         num_samples = 0
         for fd in self.data_list1:
-
-            nx, nt = get_shape_das_continous_data_h5(self.data_path / fd)  # (nch, nt)
+            nx, nt = get_shape_das_continuous_data_h5(self.data_path1 / fd)  # (nch, nt)
 
             ## cut blocks
             min_channel = self.config.min_channel if self.config.min_channel is not None else 0
@@ -388,7 +444,7 @@ class CCIterableDataset(IterableDataset):
                 )
             else:
                 ## using delta_channel to down-sample channels needed for ambient noise
-                ## using min_channel and max_channel to selected channels that are within a range 
+                ## using min_channel and max_channel to selected channels that are within a range
                 lists_1 = range(min_channel, max_channel, self.config.delta_channel)
             lists_2 = range(min_channel, max_channel, self.config.delta_channel)
             block_num1 = int(np.ceil(len(lists_1) / self.block_size1))
@@ -396,7 +452,7 @@ class CCIterableDataset(IterableDataset):
             group_1 = [list(x) for x in np.array_split(lists_1, block_num1) if len(x) > 0]
             group_2 = [list(x) for x in np.array_split(lists_2, block_num2) if len(x) > 0]
             block_index = list(itertools.product(range(len(group_1)), range(len(group_2))))
-            
+
             ## loop each block
             for i, j in block_index:
                 num_samples += 1
@@ -405,7 +461,6 @@ class CCIterableDataset(IterableDataset):
 
 
 def generate_pairs(event1, event2, auto_xcorr=False, symmetric=True):
-
     xcor_offset = 0 if auto_xcorr else 1
 
     event1 = set(event1)
@@ -431,7 +486,7 @@ def generate_pairs(event1, event2, auto_xcorr=False, symmetric=True):
             pairs += [(evt1, evt2) for evt1 in event_inner for evt2 in event_outer2 if condition(evt1, evt2)]
     if len(event_outer1) > 0 and len(event_outer2) > 0:
         pairs += [(evt1, evt2) for evt1 in event_outer1 for evt2 in event_outer2 if condition(evt1, evt2)]
-    
+
     # print(f"Total number of pairs: {len(pairs)}")
     return pairs
 
@@ -445,13 +500,13 @@ def read_pair_list(file_pair_list):
     return pair_list, data_list1, data_list2
 
 
-def generate_block_index(group1, group2, pair_list=None, auto_xcorr=False, min_sample_per_block=1):
+def generate_block_index(group1, group2, pair_list=None, auto_xcorr=False, symmetric=False, min_sample_per_block=1):
     block_index = [(i, j) for i in range(len(group1)) for j in range(len(group2))]
     num_empty_index = []
     for i, j in tqdm(block_index, desc="Generating blocks"):
         num_samples = 0
         event1, event2 = group1[i], group2[j]
-        pairs = generate_pairs(event1, event2, auto_xcorr=auto_xcorr)
+        pairs = generate_pairs(event1, event2, auto_xcorr=auto_xcorr, symmetric=symmetric)
         if pair_list is None:
             num_samples = len(pairs)
         else:
@@ -463,8 +518,7 @@ def generate_block_index(group1, group2, pair_list=None, auto_xcorr=False, min_s
     return num_empty_index
 
 
-def read_data(file_name, data_path, format="h5", mode="CC"):
-
+def read_data(file_name, data_path, format="h5", mode="CC", config={}):
     if mode == "CC":
         if format == "h5":
             data_list, info_list = read_das_eventphase_data_h5(
@@ -473,12 +527,48 @@ def read_data(file_name, data_path, format="h5", mode="CC"):
             ## TODO: check with Jiaxuan; why do we need to read a list but return the first one
             data = data_list[0]
             info = info_list[0]
-            
+
     elif mode == "AN":
-        if format == "h5": 
+        if format == "h5":
             data, info = read_das_continuous_data_h5(data_path / file_name, dataset_keys=[])
 
-    return {"data": torch.tensor(data), "info": info}
+    elif mode == "TM":
+        if format == "mseed":
+            data, info = read_mseed(file_name, config.stations, config)
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+
+    return {"data": data, "info": info}
+
+
+def read_mseed(file_name, stations, config):
+    meta = obspy.read(file_name)
+    meta.merge(fill_value="latest")
+    for tr in meta:
+        if tr.stats.sampling_rate != config.sampling_rate:
+            tr.resample(config.sampling_rate)
+    begin_time = min([tr.stats.starttime for tr in meta])
+    end_time = max([tr.stats.endtime for tr in meta])
+    meta.detrend("constant")
+    meta.trim(begin_time, end_time, pad=True, fill_value=0)
+    nt = meta[0].stats.npts
+    data = np.zeros([3, len(stations), nt])
+    component_mapping = {"1": 2, "2": 1, "3": 0, "E": 0, "N": 1, "Z": 2}
+    for i, sta in stations.iterrows():
+        if len(sta["component"]) == 3:
+            for j, c in enumerate(sta["component"]):
+                st = meta.select(id=f"{sta['station_id']}{c}")
+                data[j, i, :] = st[0].data
+        else:
+            j = component_mapping[sta["component"]]
+            st = meta.select(id=f"{sta['station_id']}{c}")
+            data[j, i, :] = st[0].data
+
+    return data, {
+        "begin_time": begin_time.datetime,
+        "end_time": end_time.datetime,
+        "station_id": stations["station_id"].tolist(),
+    }
 
 
 def read_das_continuous_data_h5(fn, dataset_keys=[]):
@@ -494,7 +584,8 @@ def read_das_continuous_data_h5(fn, dataset_keys=[]):
             info[key] = f[key][:]
     return data, info
 
-def get_shape_das_continous_data_h5(file):
+
+def get_shape_das_continuous_data_h5(file):
     with h5py.File(file, "r") as f:
         if "Data" in f:
             data_shape = f["Data"].shape

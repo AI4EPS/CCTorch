@@ -21,18 +21,31 @@ import torch
 from tqdm.auto import tqdm
 import json
 
+
 # %%
 def write_results(results, result_path, ccconfig, rank=0, world_size=1):
     if ccconfig.mode == "CC":
-        ## TODO: add writting for CC
         write_cc_pairs(results, result_path, ccconfig, rank=rank, world_size=world_size)
     elif ccconfig.mode == "TM":
-        ## TODO: add writting for CC
-        pass
+        write_tm_events(results, result_path, ccconfig, rank=rank, world_size=world_size)
     elif ccconfig.mode == "AN":
         write_ambient_noise(results, result_path, ccconfig, rank=rank, world_size=world_size)
     else:
         raise ValueError(f"{ccconfig.mode} not supported")
+
+
+def write_tm_events(results, result_path, ccconfig, rank=0, world_size=1):
+    if not isinstance(result_path, Path):
+        result_path = Path(result_path)
+
+    events = []
+    for meta in results:
+        for event_time, event_score in zip(meta["event_time"], meta["event_score"]):
+            events.append({"event_time": event_time.isoformat(), "event_score": round(event_score, 3)})
+    if len(events) > 0:
+        events = pd.DataFrame(events)
+        events = events.sort_values(by="event_time", ascending=True)
+        events.to_csv(result_path / f"cctorch_events_{rank:03d}_{world_size:03d}.csv", index=False)
 
 
 def write_cc_pairs(results, result_path, ccconfig, rank=0, world_size=1, plot_figure=False):
@@ -41,21 +54,21 @@ def write_cc_pairs(results, result_path, ccconfig, rank=0, world_size=1, plot_fi
     Parameters
     ----------
     results : list of dict
-        List of results from cross-correlation. 
+        List of results from cross-correlation.
         e.g. [{
-            "topk_index": topk_index, 
-            "topk_score": topk_score, 
-            "neighbor_score": neighbor_score, 
+            "topk_index": topk_index,
+            "topk_score": topk_score,
+            "neighbor_score": neighbor_score,
             "pair_index": pair_index}]
     """
-    
+
     if not isinstance(result_path, Path):
         result_path = Path(result_path)
 
     min_cc_score = ccconfig.min_cc_score
-    min_cc_ratio = ccconfig.min_cc_ratio  
-    min_cc_weight = ccconfig.min_cc_weight  
-    
+    min_cc_ratio = ccconfig.min_cc_ratio
+    min_cc_weight = ccconfig.min_cc_weight
+
     if "cc_mean" in results[0]:
         with open(result_path / f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.txt", "a") as fp:
             for meta in results:
@@ -65,7 +78,7 @@ def write_cc_pairs(results, result_path, ccconfig, rank=0, world_size=1, plot_fi
                 for i in range(nb):
                     pair_id = pair_index[i]
                     id1, id2 = pair_id
-                    score = ','.join([f"{x.item():.3f}" for x in cc_mean[i]])
+                    score = ",".join([f"{x.item():.3f}" for x in cc_mean[i]])
                     fp.write(f"{id1},{id2},{score}\n")
 
     with h5py.File(result_path / f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5", "a") as fp:
@@ -78,24 +91,25 @@ def write_cc_pairs(results, result_path, ccconfig, rank=0, world_size=1, plot_fi
             nb, nch, nx, nk = topk_index.shape
 
             for i in range(nb):
-
                 cc_score = topk_score[i, :, :, 0]
                 cc_weight = topk_score[i, :, :, 0] - topk_score[i, :, :, 1]
 
-                if ((cc_score.max() >= min_cc_score) and (cc_weight.max() >= min_cc_weight) and
-                    (torch.sum((cc_score > min_cc_score) & (cc_weight > min_cc_weight)) >= nch * nx * min_cc_ratio)):
-
+                if (
+                    (cc_score.max() >= min_cc_score)
+                    and (cc_weight.max() >= min_cc_weight)
+                    and (torch.sum((cc_score > min_cc_score) & (cc_weight > min_cc_weight)) >= nch * nx * min_cc_ratio)
+                ):
                     pair_id = pair_index[i]
                     id1, id2 = pair_id
                     if int(id1) > int(id2):
                         id1, id2 = id2, id1
-                        topk_index = - topk_index
-                
+                        topk_index = -topk_index
+
                     if f"{id1}/{id2}" not in fp:
                         gp = fp.create_group(f"{id1}/{id2}")
                     else:
                         gp = fp[f"{id1}/{id2}"]
-                    
+
                     if f"cc_index" in gp:
                         del gp["cc_index"]
                     gp.create_dataset(f"cc_index", data=topk_index[i].cpu())
@@ -108,17 +122,17 @@ def write_cc_pairs(results, result_path, ccconfig, rank=0, world_size=1, plot_fi
                     if f"neighbor_score" in gp:
                         del gp["neighbor_score"]
                     gp.create_dataset(f"neighbor_score", data=neighbor_score[i].cpu())
-                    
+
                     if id2 != id1:
                         if f"{id2}/{id1}" not in fp:
                             # fp[f"{id2}/{id1}"] = h5py.SoftLink(f"/{id1}/{id2}")
                             gp = fp.create_group(f"{id2}/{id1}")
                         else:
                             gp = fp[f"{id2}/{id1}"]
-                        
+
                         if f"cc_index" in gp:
                             del gp["cc_index"]
-                        gp.create_dataset(f"cc_index", data= - topk_index[i].cpu())
+                        gp.create_dataset(f"cc_index", data=-topk_index[i].cpu())
                         if f"neighbor_score" in gp:
                             del gp["neighbor_score"]
                         gp.create_dataset(f"neighbor_score", data=neighbor_score[i].cpu().flip(-1))
@@ -128,15 +142,29 @@ def write_cc_pairs(results, result_path, ccconfig, rank=0, world_size=1, plot_fi
                         if f"cc_weight" in gp:
                             del gp["cc_weight"]
                         gp["cc_weight"] = fp[f"{id1}/{id2}/cc_weight"]
-                    
+
                     if plot_figure:
                         for j in range(nch):
                             fig, ax = plt.subplots(nrows=1, ncols=3, squeeze=False, figsize=(10, 20), sharey=True)
-                            ax[0, 0].imshow(meta["xcorr"][i, j, :, :].cpu().numpy(), cmap="seismic", vmax=1, vmin=-1, aspect="auto")
+                            ax[0, 0].imshow(
+                                meta["xcorr"][i, j, :, :].cpu().numpy(), cmap="seismic", vmax=1, vmin=-1, aspect="auto"
+                            )
                             for k in range(nx):
-                                ax[0, 1].plot(meta["data1"][i, j, k, :].cpu().numpy()/np.max(np.abs(meta["data1"][i, j, k, :].cpu().numpy()))+k, linewidth=1, color="k")
-                                ax[0, 2].plot(meta["data2"][i, j, k, :].cpu().numpy()/np.max(np.abs(meta["data2"][i, j, k, :].cpu().numpy()))+k, linewidth=1, color="k")
-                            
+                                ax[0, 1].plot(
+                                    meta["data1"][i, j, k, :].cpu().numpy()
+                                    / np.max(np.abs(meta["data1"][i, j, k, :].cpu().numpy()))
+                                    + k,
+                                    linewidth=1,
+                                    color="k",
+                                )
+                                ax[0, 2].plot(
+                                    meta["data2"][i, j, k, :].cpu().numpy()
+                                    / np.max(np.abs(meta["data2"][i, j, k, :].cpu().numpy()))
+                                    + k,
+                                    linewidth=1,
+                                    color="k",
+                                )
+
                             try:
                                 fig.savefig(f"debug/test_{pair_id[0]}_{pair_id[1]}_{j}.png", dpi=300)
                             except:
@@ -144,10 +172,9 @@ def write_cc_pairs(results, result_path, ccconfig, rank=0, world_size=1, plot_fi
                                 fig.savefig(f"debug/test_{pair_id[0]}_{pair_id[1]}_{j}.png", dpi=300)
                             print(f"debug/test_{pair_id[0]}_{pair_id[1]}_{j}.png")
                             plt.close(fig)
-                            
+
 
 def write_ambient_noise(results, result_path, ccconfig, rank=0, world_size=1):
-
     if not isinstance(result_path, Path):
         result_path = Path(result_path)
 
@@ -161,7 +188,7 @@ def write_ambient_noise(results, result_path, ccconfig, rank=0, world_size=1):
                 # for j, pair_id in enumerate(meta["pair_index"]):
                 for pair_id in meta["pair_index"]:
                     list1, list2 = pair_id
-                    
+
                     for j, (id1, id2) in enumerate(zip(list1, list2)):
                         if f"{id1}/{id2}" not in fp:
                             gp = fp.create_group(f"{id1}/{id2}")
@@ -173,7 +200,7 @@ def write_ambient_noise(results, result_path, ccconfig, rank=0, world_size=1):
                             count = ds.attrs["count"]
                             ds[:] = count / (count + 1) * ds[:] + data[..., j, :] / (count + 1)
                             ds.attrs["count"] = count + 1
-                        
+
                         if f"{id2}/{id1}" not in fp:
                             gp = fp.create_group(f"{id2}/{id1}")
                             ds = gp.create_dataset("xcorr", data=np.flip(data[..., j, :], axis=-1))
