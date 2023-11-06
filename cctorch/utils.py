@@ -1,8 +1,9 @@
 # %%
+import dataclasses
+import json
 import math
 import multiprocessing as mp
 import os
-import dataclasses
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from multiprocessing import shared_memory
@@ -19,7 +20,6 @@ import scipy
 import scipy.signal
 import torch
 from tqdm.auto import tqdm
-import json
 
 
 # %%
@@ -48,7 +48,7 @@ def write_tm_events(results, result_path, ccconfig, rank=0, world_size=1):
         events.to_csv(result_path / f"cctorch_events_{rank:03d}_{world_size:03d}.csv", index=False)
 
 
-def write_cc_pairs(results, result_path, ccconfig, rank=0, world_size=1, plot_figure=False):
+def write_cc_pairs(results, fp, ccconfig, plot_figure=False):
     """
     Write cross-correlation results to disk.
     Parameters
@@ -62,116 +62,156 @@ def write_cc_pairs(results, result_path, ccconfig, rank=0, world_size=1, plot_fi
             "pair_index": pair_index}]
     """
 
-    if not isinstance(result_path, Path):
-        result_path = Path(result_path)
+    for meta in results:
+        topk_index = meta["topk_index"].cpu().numpy()
+        topk_score = meta["topk_score"].cpu().numpy()
+        neighbor_score = meta["neighbor_score"].cpu().numpy()
+        pair_index = meta["pair_index"]
+        cc_weight = topk_score[:, :, :, 0] - topk_score[:, :, :, 1]
+        if "cc_sum" in meta:
+            cc_sum = meta["cc_sum"].cpu().numpy()
+        else:
+            cc_sum = None
 
-    min_cc_score = ccconfig.min_cc_score
-    min_cc_ratio = ccconfig.min_cc_ratio
-    min_cc_weight = ccconfig.min_cc_weight
+        nb, nch, nx, nk = topk_index.shape
 
-    if "cc_mean" in results[0]:
-        with open(result_path / f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.txt", "a") as fp:
-            for meta in results:
-                cc_mean = meta["cc_mean"]
-                pair_index = meta["pair_index"]
-                nb, nch = cc_mean.shape
-                for i in range(nb):
-                    pair_id = pair_index[i]
-                    id1, id2 = pair_id
-                    score = ",".join([f"{x.item():.3f}" for x in cc_mean[i]])
-                    fp.write(f"{id1},{id2},{score}\n")
+        for i in range(nb):
+            pair_id = pair_index[i]
+            id1, id2 = pair_id
+            if int(id1) > int(id2):
+                id1, id2 = id2, id1
+                topk_index = -topk_index
 
-    with h5py.File(result_path / f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5", "a") as fp:
-        for meta in results:
-            topk_index = meta["topk_index"]
-            topk_score = meta["topk_score"]
-            neighbor_score = meta["neighbor_score"]
-            pair_index = meta["pair_index"]
+            if f"{id1}/{id2}" not in fp:
+                gp = fp.create_group(f"{id1}/{id2}")
+            else:
+                gp = fp[f"{id1}/{id2}"]
 
-            nb, nch, nx, nk = topk_index.shape
+            gp.create_dataset(f"cc_index", data=topk_index[i])
+            gp.create_dataset(f"cc_score", data=topk_score[i])
+            gp.create_dataset(f"cc_weight", data=cc_weight[i])
+            gp.create_dataset(f"neighbor_score", data=neighbor_score[i])
+            if cc_sum is not None:
+                gp.create_dataset(f"cc_sum", data=cc_sum[i])
 
-            for i in range(nb):
-                cc_score = topk_score[i, :, :, 0]
-                cc_weight = topk_score[i, :, :, 0] - topk_score[i, :, :, 1]
+            # if id2 != id1:
+            #     fp[f"{id2}/{id1}"] = h5py.SoftLink(f"/{id1}/{id2}")
 
-                if (
-                    (cc_score.max() >= min_cc_score)
-                    and (cc_weight.max() >= min_cc_weight)
-                    and (torch.sum((cc_score > min_cc_score) & (cc_weight > min_cc_weight)) >= nch * nx * min_cc_ratio)
-                ):
-                    pair_id = pair_index[i]
-                    id1, id2 = pair_id
-                    if int(id1) > int(id2):
-                        id1, id2 = id2, id1
-                        topk_index = -topk_index
+            if plot_figure:
+                for j in range(nch):
+                    fig, ax = plt.subplots(nrows=1, ncols=3, squeeze=False, figsize=(10, 20), sharey=True)
+                    ax[0, 0].imshow(meta["xcorr"][i, j, :, :], cmap="seismic", vmax=1, vmin=-1, aspect="auto")
+                    for k in range(nx):
+                        ax[0, 1].plot(
+                            meta["data1"][i, j, k, :] / np.max(np.abs(meta["data1"][i, j, k, :])) + k,
+                            linewidth=1,
+                            color="k",
+                        )
+                        ax[0, 2].plot(
+                            meta["data2"][i, j, k, :] / np.max(np.abs(meta["data2"][i, j, k, :])) + k,
+                            linewidth=1,
+                            color="k",
+                        )
 
-                    if f"{id1}/{id2}" not in fp:
-                        gp = fp.create_group(f"{id1}/{id2}")
-                    else:
-                        gp = fp[f"{id1}/{id2}"]
+                    try:
+                        fig.savefig(f"debug/test_{pair_id[0]}_{pair_id[1]}_{j}.png", dpi=300)
+                    except:
+                        os.mkdir("debug")
+                        fig.savefig(f"debug/test_{pair_id[0]}_{pair_id[1]}_{j}.png", dpi=300)
+                    print(f"debug/test_{pair_id[0]}_{pair_id[1]}_{j}.png")
+                    plt.close(fig)
 
-                    if f"cc_index" in gp:
-                        del gp["cc_index"]
-                    gp.create_dataset(f"cc_index", data=topk_index[i].cpu())
-                    if f"cc_score" in gp:
-                        del gp["cc_score"]
-                    gp.create_dataset(f"cc_score", data=topk_score[i].cpu())
-                    if f"cc_weight" in gp:
-                        del gp["cc_weight"]
-                    gp.create_dataset(f"cc_weight", data=cc_weight.cpu())
-                    if f"neighbor_score" in gp:
-                        del gp["neighbor_score"]
-                    gp.create_dataset(f"neighbor_score", data=neighbor_score[i].cpu())
+    # with h5py.File(result_path / f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5", "a") as fp:
+    #     for meta in results:
+    #         topk_index = meta["topk_index"]
+    #         topk_score = meta["topk_score"]
+    #         neighbor_score = meta["neighbor_score"]
+    #         pair_index = meta["pair_index"]
 
-                    if id2 != id1:
-                        if f"{id2}/{id1}" not in fp:
-                            # fp[f"{id2}/{id1}"] = h5py.SoftLink(f"/{id1}/{id2}")
-                            gp = fp.create_group(f"{id2}/{id1}")
-                        else:
-                            gp = fp[f"{id2}/{id1}"]
+    #         nb, nch, nx, nk = topk_index.shape
 
-                        if f"cc_index" in gp:
-                            del gp["cc_index"]
-                        gp.create_dataset(f"cc_index", data=-topk_index[i].cpu())
-                        if f"neighbor_score" in gp:
-                            del gp["neighbor_score"]
-                        gp.create_dataset(f"neighbor_score", data=neighbor_score[i].cpu().flip(-1))
-                        if f"cc_score" in gp:
-                            del gp["cc_score"]
-                        gp["cc_score"] = fp[f"{id1}/{id2}/cc_score"]
-                        if f"cc_weight" in gp:
-                            del gp["cc_weight"]
-                        gp["cc_weight"] = fp[f"{id1}/{id2}/cc_weight"]
+    #         for i in range(nb):
+    #             cc_score = topk_score[i, :, :, 0]
+    #             cc_weight = topk_score[i, :, :, 0] - topk_score[i, :, :, 1]
 
-                    if plot_figure:
-                        for j in range(nch):
-                            fig, ax = plt.subplots(nrows=1, ncols=3, squeeze=False, figsize=(10, 20), sharey=True)
-                            ax[0, 0].imshow(
-                                meta["xcorr"][i, j, :, :].cpu().numpy(), cmap="seismic", vmax=1, vmin=-1, aspect="auto"
-                            )
-                            for k in range(nx):
-                                ax[0, 1].plot(
-                                    meta["data1"][i, j, k, :].cpu().numpy()
-                                    / np.max(np.abs(meta["data1"][i, j, k, :].cpu().numpy()))
-                                    + k,
-                                    linewidth=1,
-                                    color="k",
-                                )
-                                ax[0, 2].plot(
-                                    meta["data2"][i, j, k, :].cpu().numpy()
-                                    / np.max(np.abs(meta["data2"][i, j, k, :].cpu().numpy()))
-                                    + k,
-                                    linewidth=1,
-                                    color="k",
-                                )
+    #             if (
+    #                 (cc_score.max() >= min_cc_score)
+    #                 and (cc_weight.max() >= min_cc_weight)
+    #                 and (torch.sum((cc_score > min_cc_score) & (cc_weight > min_cc_weight)) >= nch * nx * min_cc_ratio)
+    #             ):
+    #                 pair_id = pair_index[i]
+    #                 id1, id2 = pair_id
+    #                 if int(id1) > int(id2):
+    #                     id1, id2 = id2, id1
+    #                     topk_index = -topk_index
 
-                            try:
-                                fig.savefig(f"debug/test_{pair_id[0]}_{pair_id[1]}_{j}.png", dpi=300)
-                            except:
-                                os.mkdir("debug")
-                                fig.savefig(f"debug/test_{pair_id[0]}_{pair_id[1]}_{j}.png", dpi=300)
-                            print(f"debug/test_{pair_id[0]}_{pair_id[1]}_{j}.png")
-                            plt.close(fig)
+    #                 if f"{id1}/{id2}" not in fp:
+    #                     gp = fp.create_group(f"{id1}/{id2}")
+    #                 else:
+    #                     gp = fp[f"{id1}/{id2}"]
+
+    #                 if f"cc_index" in gp:
+    #                     del gp["cc_index"]
+    #                 gp.create_dataset(f"cc_index", data=topk_index[i].cpu())
+    #                 if f"cc_score" in gp:
+    #                     del gp["cc_score"]
+    #                 gp.create_dataset(f"cc_score", data=topk_score[i].cpu())
+    #                 if f"cc_weight" in gp:
+    #                     del gp["cc_weight"]
+    #                 gp.create_dataset(f"cc_weight", data=cc_weight.cpu())
+    #                 if f"neighbor_score" in gp:
+    #                     del gp["neighbor_score"]
+    #                 gp.create_dataset(f"neighbor_score", data=neighbor_score[i].cpu())
+
+    #                 if id2 != id1:
+    #                     if f"{id2}/{id1}" not in fp:
+    #                         # fp[f"{id2}/{id1}"] = h5py.SoftLink(f"/{id1}/{id2}")
+    #                         gp = fp.create_group(f"{id2}/{id1}")
+    #                     else:
+    #                         gp = fp[f"{id2}/{id1}"]
+
+    #                     if f"cc_index" in gp:
+    #                         del gp["cc_index"]
+    #                     gp.create_dataset(f"cc_index", data=-topk_index[i].cpu())
+    #                     if f"neighbor_score" in gp:
+    #                         del gp["neighbor_score"]
+    #                     gp.create_dataset(f"neighbor_score", data=neighbor_score[i].cpu().flip(-1))
+    #                     if f"cc_score" in gp:
+    #                         del gp["cc_score"]
+    #                     gp["cc_score"] = fp[f"{id1}/{id2}/cc_score"]
+    #                     if f"cc_weight" in gp:
+    #                         del gp["cc_weight"]
+    #                     gp["cc_weight"] = fp[f"{id1}/{id2}/cc_weight"]
+
+    #                 if plot_figure:
+    #                     for j in range(nch):
+    #                         fig, ax = plt.subplots(nrows=1, ncols=3, squeeze=False, figsize=(10, 20), sharey=True)
+    #                         ax[0, 0].imshow(
+    #                             meta["xcorr"][i, j, :, :].cpu().numpy(), cmap="seismic", vmax=1, vmin=-1, aspect="auto"
+    #                         )
+    #                         for k in range(nx):
+    #                             ax[0, 1].plot(
+    #                                 meta["data1"][i, j, k, :].cpu().numpy()
+    #                                 / np.max(np.abs(meta["data1"][i, j, k, :].cpu().numpy()))
+    #                                 + k,
+    #                                 linewidth=1,
+    #                                 color="k",
+    #                             )
+    #                             ax[0, 2].plot(
+    #                                 meta["data2"][i, j, k, :].cpu().numpy()
+    #                                 / np.max(np.abs(meta["data2"][i, j, k, :].cpu().numpy()))
+    #                                 + k,
+    #                                 linewidth=1,
+    #                                 color="k",
+    #                             )
+
+    #                         try:
+    #                             fig.savefig(f"debug/test_{pair_id[0]}_{pair_id[1]}_{j}.png", dpi=300)
+    #                         except:
+    #                             os.mkdir("debug")
+    #                             fig.savefig(f"debug/test_{pair_id[0]}_{pair_id[1]}_{j}.png", dpi=300)
+    #                         print(f"debug/test_{pair_id[0]}_{pair_id[1]}_{j}.png")
+    #                         plt.close(fig)
 
 
 def write_ambient_noise(results, result_path, ccconfig, rank=0, world_size=1):

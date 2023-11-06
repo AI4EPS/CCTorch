@@ -1,17 +1,17 @@
+import itertools
 from pathlib import Path
 
 import h5py
+import matplotlib.pyplot as plt
 import numpy as np
+import obspy
 import pandas as pd
 import scipy.signal
 import torch
 import torch.nn.functional as F
 import torchaudio
 from torch.utils.data import Dataset, IterableDataset
-import itertools
-import matplotlib.pyplot as plt
 from tqdm import tqdm
-import obspy
 
 
 class CCDataset(Dataset):
@@ -146,7 +146,12 @@ class CCIterableDataset(IterableDataset):
         self.device = device
         self.dtype = dtype
         self.num_batch = None
-        self.symmetric = True if self.mode == "CC" else False
+
+        if self.mode == "CC":
+            self.symmetric = True
+            self.data_list2 = self.data_list1
+            self.data_format2 = self.data_format1
+            self.data_path2 = self.data_path1
 
         if self.mode == "AN":
             ## For ambient noise, we split chunks in the sampling function

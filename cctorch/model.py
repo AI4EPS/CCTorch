@@ -1,9 +1,10 @@
+import math
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
 from tqdm import tqdm
-import numpy as np
 
 
 class CCModel(nn.Module):
@@ -145,7 +146,15 @@ class CCModel(nn.Module):
         if self.transforms is not None:
             meta = self.transforms(meta)
 
-        return meta
+        output = {}
+        for key in meta:
+            if key not in ["data1", "data2", "info1", "info2"]:
+                if isinstance(meta[key], torch.Tensor):
+                    output[key] = meta[key].cpu()
+                else:
+                    output[key] = meta[key]
+
+        return output
 
     def forward_map(self, x):
         """Perform cross-correlation on input data (dataset_type == map)

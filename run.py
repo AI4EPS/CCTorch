@@ -1,30 +1,28 @@
+import functools
+import json
 import logging
 import multiprocessing as mp
+import os
+import pickle
+import shelve
+import shutil
+import threading
 from dataclasses import dataclass
 from multiprocessing import Manager
 from pathlib import Path
-import shutil
-import os
 
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import functools
-import json
 import torch
 import torch.nn as nn
 import torchvision.transforms as T
-from torch.utils.data import DataLoader
-
 import utils
-from cctorch import (
-    CCDataset,
-    CCIterableDataset,
-    CCModel,
-)
+from cctorch import CCDataset, CCIterableDataset, CCModel
 from cctorch.transforms import *
-from cctorch.utils import write_results
+from cctorch.utils import write_cc_pairs, write_results
+from torch.utils.data import DataLoader
 
 
 def get_args_parser(add_help=True):
@@ -217,12 +215,12 @@ def main(args):
         # preprocess.append(Filtering(1, 15, 100, 0.1, ccconfig.dtype, args.device))
         if args.taper:
             preprocess.append(T.Lambda(taper_time))
-        if args.interp:
-            preprocess.append(T.Lambda(interp_time_cubic_spline))
         if args.domain == "time":
             preprocess.append(T.Lambda(normalize))
         elif args.domain == "frequency":
             preprocess.append(T.Lambda(fft_real_normalize))
+        else:
+            raise ValueError(f"domain {args.domain} not supported")
     elif args.mode == "TM":
         ## TODO add preprocess for template matching
         pass
@@ -324,18 +322,66 @@ def main(args):
 
     num = 0
     results = []
+    threads = []
+    fp = h5py.File(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5"), "w")
+
     metric_logger = utils.MetricLogger(delimiter="  ")
     log_freq = max(1, 10240 // args.batch_size) if args.mode == "CC" else 1
     for data in metric_logger.log_every(dataloader, log_freq, ""):
         result = ccmodel(data)
-        results.append(result)
-        num += 1
-        if num % args.buffer_size == 0:
-            write_results(results, args.result_path, ccconfig, rank=rank, world_size=world_size)
-            num = 0
-            results = []
-    if num > 0:
-        write_results(results, args.result_path, ccconfig, rank=rank, world_size=world_size)
+
+        thread = threading.Thread(
+            target=write_cc_pairs,
+            # args=([result], args.result_path, ccconfig, rank, world_size),
+            args=([result], fp, ccconfig),
+        )
+        thread.start()
+        threads.append(thread)
+        print(len(threads))
+
+        if len(threads) >= 8:
+            for thread in threads:
+                thread.join()
+            threads = []
+
+    for thread in threads:
+        thread.join()
+    fp.close()
+
+    # write_results([result], args.result_path, ccconfig, rank=rank, world_size=world_size)
+    # results.append(result)
+    # num += 1
+
+    # topk_index = meta["topk_index"]
+    # topk_score = meta["topk_score"]
+    # neighbor_score = meta["neighbor_score"]
+    # pair_index = meta["pair_index"]
+    # for i, pair_index in enumerate(result["pair_index"]):
+    #     topk_index = result["topk_index"].cpu().numpy()
+    #     topk_score = result["topk_score"].cpu().numpy()
+    #     neighbor_score = result["neighbor_score"].cpu().numpy()
+    #     cc_quality = result["cc_quality"].cpu().numpy()
+    # print(topk_index[i].dtype)
+    # print(topk_score[i].dtype)
+    # print(neighbor_score[i].dtype)
+    # db[pair_index] = {
+    #     "topk_index": topk_index[i],
+    #     "topk_score": topk_score[i],
+    #     "neighbor_score": neighbor_score[i],
+    #     "cc_quality": cc_quality[i],
+    # }
+    # db[str(pair_index)] = {
+    #     "topk_index": pickle.dumps(topk_index[i]),
+    #     "topk_score": pickle.dumps(topk_score[i]),
+    #     "neighbor_score": pickle.dumps(neighbor_score[i]),
+    #     "cc_quality": pickle.dumps(cc_quality[i]),
+    # }
+    #     if num % args.buffer_size == 0:
+    #         write_results(results, args.result_path, ccconfig, rank=rank, world_size=world_size)
+    #         num = 0
+    #         results = []
+    # if num > 0:
+    #     write_results(results, args.result_path, ccconfig, rank=rank, world_size=world_size)
 
 
 if __name__ == "__main__":

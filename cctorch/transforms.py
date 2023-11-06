@@ -1,13 +1,14 @@
+from datetime import datetime, timedelta, timezone
+
 import numpy as np
+import scipy
 import torch
 import torch.nn.functional as F
-import scipy
+import torchaudio
 from scipy import sparse
 from scipy.signal import tukey
 from scipy.sparse.linalg import lsmr
 from tqdm import tqdm
-import torchaudio
-from datetime import datetime, timezone, timedelta
 
 
 #### Common ####
@@ -48,14 +49,18 @@ class Filtering(torch.nn.Module):
 
 
 class Reduction(torch.nn.Module):
-    def __init__(self, mode="reduce_x"):
+    def __init__(self, mode="reduce_x", threshold=0.5):
         super().__init__()
         self.mode = mode
+        self.threshold = threshold
 
     def forward(self, meta):
         if self.mode == "reduce_x":
-            ccmean = torch.mean(torch.max(torch.abs(meta["xcorr"]), dim=-1).values, dim=-1)
-            meta["cc_mean"] = ccmean
+            # ccmean = torch.mean(torch.max(torch.abs(meta["xcorr"]), dim=-1).values, dim=-1)
+            # meta["cc_mean"] = ccmean
+            cc_quality = torch.max(torch.abs(meta["xcorr"]), dim=-1).values  # nb, nc, nx
+            cc_quality = cc_quality * (cc_quality > self.threshold)
+            meta["cc_sum"] = torch.sum(cc_quality, dim=-1)  # nb, nc
         else:
             raise NotImplementedError
 
@@ -134,6 +139,28 @@ class TemporalMovingNormalization(torch.nn.Module):
 
 
 ##### Cross-Correlation ######
+
+
+def taper_time(data, alpha=0.8):
+    taper = tukey(data.shape[-1], alpha)
+    return data * torch.tensor(taper, device=data.device)
+
+
+def normalize(x):
+    x -= torch.mean(x, dim=-1, keepdims=True)
+    norm = x.square().sum(dim=-1, keepdims=True).sqrt()
+    norm[norm == 0] = 1
+    x /= norm
+    return x
+
+
+def fft_real_normalize(x):
+    """"""
+    x -= torch.mean(x, dim=-1, keepdims=True)
+    x /= x.square().sum(dim=-1, keepdims=True).sqrt()
+    return fft_real(x)
+
+
 class DetectPeaks(torch.nn.Module):
     def __init__(self, vmin=0.3, kernel=3, stride=1, K=3):
         super().__init__()
@@ -251,22 +278,6 @@ def fft_real(x):
     return torch.fft.rfft(x, n=nfast, dim=-1)
 
 
-def fft_real_normalize(x):
-    """"""
-    x -= torch.mean(x, dim=-1, keepdims=True)
-    x /= x.square().sum(dim=-1, keepdims=True).sqrt()
-    return fft_real(x)
-
-
-def normalize(x):
-    x -= torch.mean(x, dim=-1, keepdims=True)
-    # x /= x.square().sum(dim=-1, keepdims=True).sqrt()
-    norm = x.square().sum(dim=-1, keepdims=True).sqrt()
-    norm[norm == 0] = 1
-    x /= norm
-    return x
-
-
 # torch helper functions
 def count_tensor_byte(*args):
     total_byte_size = 0
@@ -303,11 +314,6 @@ def gather_roll(data, shift_index):
     index = torch.arange(ncol, device=data.device).view([1, ncol]).repeat((nrow, 1))
     index = (index - shift_index.view([nrow, 1])) % ncol
     return torch.gather(data, 1, index)
-
-
-def taper_time(data, alpha=0.8):
-    taper = tukey(data.shape[-1], alpha)
-    return data * torch.tensor(taper, device=data.device)
 
 
 def h_poly(t):
