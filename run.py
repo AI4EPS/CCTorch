@@ -337,7 +337,6 @@ def main(args):
         )
         thread.start()
         threads.append(thread)
-        print(len(threads))
 
         if len(threads) >= 8:
             for thread in threads:
