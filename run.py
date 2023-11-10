@@ -183,7 +183,7 @@ def main(args):
         use_pair_index = True if args.dataset_type == "map" else False
         min_cc_score = 0.6
         min_cc_ratio = 0.0  ## ratio is defined as the portion of channels with cc score larger than min_cc_score
-        min_cc_weight = 0.0  ## the weight is defined as the difference between largest and second largest cc score
+        min_cc_diff = 0.0  ## the weight is defined as the difference between largest and second largest cc score
 
         ## template matching
         shift_t = args.shift_t
