@@ -131,8 +131,6 @@ class CCIterableDataset(IterableDataset):
     ):
         super(CCIterableDataset).__init__()
 
-        self.pair_list, self.data_list1, self.data_list2 = self.init_pairs(pair_list, data_list1, data_list2, config)
-
         self.mode = config.mode
         self.config = config
         self.block_size1 = block_size1
@@ -146,10 +144,10 @@ class CCIterableDataset(IterableDataset):
         self.device = device
         self.dtype = dtype
         self.num_batch = None
+        self.pair_list, self.data_list1, self.data_list2 = self.init_pairs(pair_list, data_list1, data_list2, config)
 
         if self.mode == "CC":
             self.symmetric = True
-            self.data_list2 = self.data_list1
             self.data_format2 = self.data_format1
             self.data_path2 = self.data_path1
 
@@ -172,6 +170,12 @@ class CCIterableDataset(IterableDataset):
             self.block_index = list(itertools.product(range(len(self.group1)), range(len(self.group2))))[
                 rank::world_size
             ]
+            print(
+                f"Pairs: {len(self.pair_list)}, Blocks: {len(self.group1)} x {len(self.group2)} = {len(self.block_index)}"
+            )
+            print(
+                f"data_list1: {len(self.data_list1)}, data_list2: {len(self.data_list2)}, block_size1: {block_size1}, block_size2: {block_size2}"
+            )
 
         if (self.data_format1 == "memmap") or (self.data_format2 == "memmap"):
             self.templates = np.memmap(
@@ -414,43 +418,43 @@ class CCIterableDataset(IterableDataset):
         return self.num_batch
 
     def count_sample(self, num_workers, worker_id):
-        # num_samples = 0
-        # for i, j in tqdm(self.block_index[worker_id::num_workers], desc="Counting batches"):
-        #     event1, event2 = self.group1[i], self.group2[j]
-        #     pairs = generate_pairs(event1, event2, self.config.auto_xcorr, self.symmetric)
-        #     if self.pair_list is None:
-        #         num_samples += (len(pairs) - 1) // self.batch_size + 1
+        # if self.pair_list is not None:
+        #     num_samples = (
+        #         len(self.pair_list) // min(int((self.block_size1 - 1) * (self.block_size2 - 1) / 2), self.batch_size)
+        #         + 1
+        #     )
+        # else:
+        #     if self.symmetric:
+        #         num_samples = (
+        #             len(self.data_list1)
+        #             * (len(self.data_list1) - 1)
+        #             / 2
+        #             // min(self.batch_size, int((self.block_size1 - 1) * (self.block_size2 - 1) / 2))
+        #             + 1
+        #         )
         #     else:
-        #         tmp = 0
-        #         for pair in pairs:
-        #             if pair in self.pair_list:
-        #                 tmp += 1
-        #                 if tmp % self.batch_size == 0:
-        #                     num_samples += 1
-        #                     tmp = 0
-        #         if tmp > 0:
-        #             num_samples += 1
-        if self.pair_list is not None:
-            num_samples = (
-                len(self.pair_list) // min(int((self.block_size1 - 1) * (self.block_size2 - 1) / 2), self.batch_size)
-                + 1
-            )
+        #         num_samples = (
+        #             len(self.data_list1)
+        #             * len(self.data_list2)
+        #             // min(self.batch_size, int((self.block_size1 - 1) * (self.block_size2 - 1) / 2))
+        #             + 1
+        #         )
+
+        if self.mode == "CC":
+            num_samples = 0
+            for i, j in tqdm(self.block_index[worker_id::num_workers], desc="Counting batches"):
+                event1, event2 = self.group1[i], self.group2[j]
+                num = 0
+                for x, y in itertools.product(event1, event2):
+                    if (x < y) and ((x, y) in self.pair_list):
+                        num += 1
+                num_samples += (num - 1) // self.batch_size + 1
         else:
-            if self.symmetric:
-                num_samples = (
-                    len(self.data_list1)
-                    * (len(self.data_list1) - 1)
-                    / 2
-                    // min(self.batch_size, int((self.block_size1 - 1) * (self.block_size2 - 1) / 2))
-                    + 1
-                )
-            else:
-                num_samples = (
-                    len(self.data_list1)
-                    * len(self.data_list2)
-                    // min(self.batch_size, int((self.block_size1 - 1) * (self.block_size2 - 1) / 2))
-                    + 1
-                )
+            num_samples = 0
+            for i, j in tqdm(self.block_index[worker_id::num_workers], desc="Counting batches"):
+                event1, event2 = self.group1[i], self.group2[j]
+                num_samples += (len(event1) * len(event2) - 1) // self.batch_size + 1
+
         return num_samples
 
     def count_sample_ambient_noise(self, num_workers, worker_id):
@@ -529,6 +533,7 @@ def read_pair_list(file_pair_list):
     # data_list2 = sorted(list(set(pairs_df["event2"].tolist())))
 
     pair_list = np.loadtxt(file_pair_list, delimiter=",", dtype=np.int64)
+    # pair_list = pair_list[:10_000_000]
     data_list1 = np.unique(pair_list[:, 0]).tolist()
     data_list2 = np.unique(pair_list[:, 1]).tolist()
     pair_list = pair_list.tolist()

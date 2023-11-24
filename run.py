@@ -23,6 +23,7 @@ from cctorch import CCDataset, CCIterableDataset, CCModel
 from cctorch.transforms import *
 from cctorch.utils import write_cc_pairs, write_results
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 
 def get_args_parser(add_help=True):
@@ -328,9 +329,10 @@ def main(args):
     threads = []
     fp = h5py.File(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5"), "w")
 
-    metric_logger = utils.MetricLogger(delimiter="  ")
-    log_freq = max(1, 10240 // args.batch_size) if args.mode == "CC" else 1
-    for data in metric_logger.log_every(dataloader, log_freq, ""):
+    # metric_logger = utils.MetricLogger(delimiter="  ")
+    # log_freq = max(1, 10240 // args.batch_size) if args.mode == "CC" else 1
+    # for data in metric_logger.log_every(dataloader, log_freq, ""):
+    for data in tqdm(dataloader):
         result = ccmodel(data)
 
         thread = threading.Thread(
