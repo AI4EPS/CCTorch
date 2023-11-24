@@ -46,10 +46,10 @@ def get_args_parser(add_help=True):
     parser.add_argument("--result_path", default="./results", type=str, help="results path")
     parser.add_argument("--dataset_type", default="iterable", type=str, help="data loader type in {map, iterable}")
     parser.add_argument(
-        "--block_size1", default=1000, type=int, help="Number of sample for the 1st data pair dimension"
+        "--block_size1", default=1024, type=int, help="Number of sample for the 1st data pair dimension"
     )
     parser.add_argument(
-        "--block_size2", default=1000, type=int, help="Number of sample for the 2nd data pair dimension"
+        "--block_size2", default=1024, type=int, help="Number of sample for the 2nd data pair dimension"
     )
     parser.add_argument("--auto_xcorr", action="store_true", help="do auto-correlation for data list")
 
@@ -58,7 +58,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--sampling_rate", default=100, type=float, help="sampling frequency")
     parser.add_argument("--domain", default="time", type=str, help="domain in {time, freqency, stft}")
     parser.add_argument("--maxlag", default=0.5, type=float, help="maximum time lag during cross-correlation")
-    parser.add_argument("--batch_size", default=64, type=int, help="batch size")
+    parser.add_argument("--batch_size", default=1024, type=int, help="batch size")
     parser.add_argument("--buffer_size", default=10, type=int, help="buffer size for writing to h5 file")
     parser.add_argument("--workers", default=4, type=int, help="data loading workers")
     parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu, Default: cuda)")
@@ -202,13 +202,16 @@ def main(args):
         assert ccconfig.shift_t
         assert ccconfig.nlag == 0
 
-    # if rank == 0:
-    #     if os.path.exists(args.result_path):
-    #         print(f"Remove existing result path: {args.result_path}")
-    #         if os.path.exists(args.result_path.rstrip("/") + "_backup"):
-    #             shutil.rmtree(args.result_path.rstrip("/") + "_backup")
-    #         shutil.move(args.result_path.rstrip("/"), args.result_path.rstrip("/") + "_backup")
-    #     os.makedirs(args.result_path)
+    if rank == 0:
+        #     if os.path.exists(args.result_path):
+        #         print(f"Remove existing result path: {args.result_path}")
+        #         if os.path.exists(args.result_path.rstrip("/") + "_backup"):
+        #             shutil.rmtree(args.result_path.rstrip("/") + "_backup")
+        #         shutil.move(args.result_path.rstrip("/"), args.result_path.rstrip("/") + "_backup")
+        #     os.makedirs(args.result_path)
+
+        if not os.path.exists(args.result_path):
+            os.makedirs(args.result_path)
 
     preprocess = []
     if args.mode == "CC":

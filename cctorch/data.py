@@ -161,14 +161,17 @@ class CCIterableDataset(IterableDataset):
             block_num2 = int(np.ceil(len(self.data_list2) / block_size2))
             self.group1 = [list(x) for x in np.array_split(self.data_list1, block_num1) if len(x) > 0]
             self.group2 = [list(x) for x in np.array_split(self.data_list2, block_num2) if len(x) > 0]
-            self.block_index = generate_block_index(
-                self.group1,
-                self.group2,
-                auto_xcorr=config.auto_xcorr,
-                pair_list=self.pair_list,
-                symmetric=self.symmetric,
-                min_sample_per_block=1,
-            )[rank::world_size]
+            # self.block_index = generate_block_index(
+            #     self.group1,
+            #     self.group2,
+            #     auto_xcorr=config.auto_xcorr,
+            #     pair_list=self.pair_list,
+            #     symmetric=self.symmetric,
+            #     min_sample_per_block=1,
+            # )[rank::world_size]
+            self.block_index = list(itertools.product(range(len(self.group1)), range(len(self.group2))))[
+                rank::world_size
+            ]
 
         if (self.data_format1 == "memmap") or (self.data_format2 == "memmap"):
             self.templates = np.memmap(
@@ -411,22 +414,43 @@ class CCIterableDataset(IterableDataset):
         return self.num_batch
 
     def count_sample(self, num_workers, worker_id):
-        num_samples = 0
-        for i, j in tqdm(self.block_index[worker_id::num_workers], desc="Counting batches"):
-            event1, event2 = self.group1[i], self.group2[j]
-            pairs = generate_pairs(event1, event2, self.config.auto_xcorr, self.symmetric)
-            if self.pair_list is None:
-                num_samples += (len(pairs) - 1) // self.batch_size + 1
+        # num_samples = 0
+        # for i, j in tqdm(self.block_index[worker_id::num_workers], desc="Counting batches"):
+        #     event1, event2 = self.group1[i], self.group2[j]
+        #     pairs = generate_pairs(event1, event2, self.config.auto_xcorr, self.symmetric)
+        #     if self.pair_list is None:
+        #         num_samples += (len(pairs) - 1) // self.batch_size + 1
+        #     else:
+        #         tmp = 0
+        #         for pair in pairs:
+        #             if pair in self.pair_list:
+        #                 tmp += 1
+        #                 if tmp % self.batch_size == 0:
+        #                     num_samples += 1
+        #                     tmp = 0
+        #         if tmp > 0:
+        #             num_samples += 1
+        if self.pair_list is not None:
+            num_samples = (
+                len(self.pair_list) // min(int((self.block_size1 - 1) * (self.block_size2 - 1) / 2), self.batch_size)
+                + 1
+            )
+        else:
+            if self.symmetric:
+                num_samples = (
+                    len(self.data_list1)
+                    * (len(self.data_list1) - 1)
+                    / 2
+                    // min(self.batch_size, int((self.block_size1 - 1) * (self.block_size2 - 1) / 2))
+                    + 1
+                )
             else:
-                tmp = 0
-                for pair in pairs:
-                    if pair in self.pair_list:
-                        tmp += 1
-                        if tmp % self.batch_size == 0:
-                            num_samples += 1
-                            tmp = 0
-                if tmp > 0:
-                    num_samples += 1
+                num_samples = (
+                    len(self.data_list1)
+                    * len(self.data_list2)
+                    // min(self.batch_size, int((self.block_size1 - 1) * (self.block_size2 - 1) / 2))
+                    + 1
+                )
         return num_samples
 
     def count_sample_ambient_noise(self, num_workers, worker_id):
@@ -473,9 +497,9 @@ def generate_pairs(event1, event2, auto_xcorr=False, symmetric=True):
     event_inner = event1 & event2
     event_outer1 = event1 - event_inner
     event_outer2 = event2 - event_inner
-    event_inner = sorted(list(event_inner))
-    event_outer1 = sorted(list(event_outer1))
-    event_outer2 = sorted(list(event_outer2))
+    event_inner = list(event_inner)
+    event_outer1 = list(event_outer1)
+    event_outer2 = list(event_outer2)
 
     if symmetric:
         condition = lambda evt1, evt2: evt1 < evt2
@@ -498,10 +522,17 @@ def generate_pairs(event1, event2, auto_xcorr=False, symmetric=True):
 
 def read_pair_list(file_pair_list):
     # read pair ids from a text file
-    pairs_df = pd.read_csv(file_pair_list, header=None, names=["event1", "event2"])
-    pair_list = {(x["event1"], x["event2"]) for _, x in pairs_df.iterrows()}
-    data_list1 = sorted(list(set(pairs_df["event1"].tolist())))
-    data_list2 = sorted(list(set(pairs_df["event2"].tolist())))
+    # pairs_df = pd.read_csv(file_pair_list, header=None, names=["event1", "event2"])
+    # # pair_list = {(x["event1"], x["event2"]) for _, x in pairs_df.iterrows()}
+    # pair_list = pairs_df[["event1", "event2"]].values.tolist()
+    # data_list1 = sorted(list(set(pairs_df["event1"].tolist())))
+    # data_list2 = sorted(list(set(pairs_df["event2"].tolist())))
+
+    pair_list = np.loadtxt(file_pair_list, delimiter=",", dtype=np.int64)
+    data_list1 = np.unique(pair_list[:, 0]).tolist()
+    data_list2 = np.unique(pair_list[:, 1]).tolist()
+    pair_list = pair_list.tolist()
+    pair_list = set(map(tuple, pair_list))
     return pair_list, data_list1, data_list2
 
 
