@@ -332,7 +332,7 @@ def main(args):
     # metric_logger = utils.MetricLogger(delimiter="  ")
     # log_freq = max(1, 10240 // args.batch_size) if args.mode == "CC" else 1
     # for data in metric_logger.log_every(dataloader, log_freq, ""):
-    for data in tqdm(dataloader):
+    for data in tqdm(dataloader, position=rank, desc=f"CC {rank}/{world_size}"):
         result = ccmodel(data)
 
         thread = threading.Thread(
