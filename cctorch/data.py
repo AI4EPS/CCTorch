@@ -167,9 +167,12 @@ class CCIterableDataset(IterableDataset):
             #     symmetric=self.symmetric,
             #     min_sample_per_block=1,
             # )[rank::world_size]
-            self.block_index = list(itertools.product(range(len(self.group1)), range(len(self.group2))))[
-                rank::world_size
-            ]
+            # self.block_index = list(itertools.product(range(len(self.group1)), range(len(self.group2))))[
+            #     rank::world_size
+            # ]
+            blocks = list(itertools.product(range(len(self.group1)), range(len(self.group2))))
+            self.block_index = self.filt_empty_block(blocks)[rank::world_size]
+
             print(f"Pairs: {len(self.pair_list)}, Blocks: {len(self.group1)} x {len(self.group2)}")
             print(
                 f"data_list1: {len(self.data_list1)}, data_list2: {len(self.data_list2)}, block_size1: {block_size1}, block_size2: {block_size2}"
@@ -455,6 +458,19 @@ class CCIterableDataset(IterableDataset):
 
         return num_samples
 
+    def filt_empty_block(self, blocks):
+        non_empty_blocks = []
+        if self.mode == "CC":
+            for i, j in tqdm(blocks, desc="Filtering empty blocks"):
+                event1, event2 = self.group1[i], self.group2[j]
+                for x, y in itertools.product(event1, event2):
+                    if (x < y) and ((x, y) in self.pair_list):
+                        non_empty_blocks.append((i, j))
+                        break
+        else:
+            non_empty_blocks = blocks
+        return non_empty_blocks
+
     def count_sample_ambient_noise(self, num_workers, worker_id):
         num_samples = 0
         for fd in self.data_list1:
@@ -491,9 +507,7 @@ class CCIterableDataset(IterableDataset):
         return num_samples
 
 
-def generate_pairs(event1, event2, auto_xcorr=False, symmetric=True):
-    xcor_offset = 0 if auto_xcorr else 1
-
+def generate_pairs(event1, event2, auto_xcorr=False, symmetric=False):
     event1 = set(event1)
     event2 = set(event2)
     event_inner = event1 & event2
@@ -504,19 +518,23 @@ def generate_pairs(event1, event2, auto_xcorr=False, symmetric=True):
     event_outer2 = list(event_outer2)
 
     if symmetric:
-        condition = lambda evt1, evt2: evt1 < evt2
+        if auto_xcorr:
+            condition = lambda evt1, evt2: evt1 <= evt2
+        else:
+            condition = lambda evt1, evt2: evt1 < evt2
     else:
         condition = lambda evt1, evt2: True
 
     pairs = []
     if len(event_inner) > 0:
-        pairs += [(evt1, evt2) for i1, evt1 in enumerate(event_inner) for evt2 in event_inner[i1 + xcor_offset :]]
+        # pairs += [(evt1, evt2) for i1, evt1 in enumerate(event_inner) for evt2 in event_inner[i1 + xcor_offset :]]
+        pairs += [(evt1, evt2) for evt1 in event_inner for evt2 in event_inner if condition(evt1, evt2)]
         if len(event_outer1) > 0:
-            pairs += [(evt1, evt2) for evt1 in event_outer1 for evt2 in event_inner if condition(evt1, evt2)]
+            pairs += [(evt1, evt2) for evt1 in event_outer1 for evt2 in event_inner]  # if condition(evt1, evt2)]
         if len(event_outer2) > 0:
-            pairs += [(evt1, evt2) for evt1 in event_inner for evt2 in event_outer2 if condition(evt1, evt2)]
+            pairs += [(evt1, evt2) for evt1 in event_inner for evt2 in event_outer2]  # if condition(evt1, evt2)]
     if len(event_outer1) > 0 and len(event_outer2) > 0:
-        pairs += [(evt1, evt2) for evt1 in event_outer1 for evt2 in event_outer2 if condition(evt1, evt2)]
+        pairs += [(evt1, evt2) for evt1 in event_outer1 for evt2 in event_outer2]  # if condition(evt1, evt2)]
 
     # print(f"Total number of pairs: {len(pairs)}")
     return pairs
