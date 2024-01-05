@@ -1,29 +1,20 @@
-import functools
+import concurrent.futures
 import json
 import logging
-import multiprocessing as mp
 import os
-import pickle
-import shelve
-import shutil
 import threading
 from dataclasses import dataclass
-from multiprocessing import Manager
-from pathlib import Path
 
 import h5py
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
 import torch
-import torch.nn as nn
 import torchvision.transforms as T
 import utils
 from cctorch import CCDataset, CCIterableDataset, CCModel
 from cctorch.transforms import *
-from cctorch.utils import write_cc_pairs, write_results
+from cctorch.utils import write_cc_pairs
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from utils import LimitedThreadPoolExecutor
 
 
 def get_args_parser(add_help=True):
@@ -252,13 +243,13 @@ def main(args):
 
     postprocess = []
     if args.mode == "CC":
-        ## add postprocess for cross-correlation
+        ## TODO: add postprocess for cross-correlation
         postprocess.append(DetectPeaks())
         postprocess.append(Reduction())
     elif args.mode == "TM":
         postprocess.append(DetectTM())
     elif args.mode == "AN":
-        ## TODO add postprocess for ambient noise
+        ## TODO: add postprocess for ambient noise
         pass
     postprocess = T.Compose(postprocess)
 
@@ -324,71 +315,17 @@ def main(args):
     )
     ccmodel.to(args.device)
 
-    num = 0
-    results = []
     threads = []
-    fp = h5py.File(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5"), "w")
-
-    # metric_logger = utils.MetricLogger(delimiter="  ")
-    # log_freq = max(1, 10240 // args.batch_size) if args.mode == "CC" else 1
-    # for data in metric_logger.log_every(dataloader, log_freq, ""):
-    for data in tqdm(dataloader, position=rank, desc=f"CC {rank}/{world_size}"):
-        result = ccmodel(data)
-
-        thread = threading.Thread(
-            target=write_cc_pairs,
-            # args=([result], args.result_path, ccconfig, rank, world_size),
-            args=([result], fp, ccconfig),
-        )
-        thread.start()
-        threads.append(thread)
-
-        if len(threads) >= 8:
-            for thread in threads:
-                thread.join()
-            threads = []
-
-    for thread in threads:
-        thread.join()
-    fp.close()
-
-    # write_results([result], args.result_path, ccconfig, rank=rank, world_size=world_size)
-    # results.append(result)
-    # num += 1
-
-    # topk_index = meta["topk_index"]
-    # topk_score = meta["topk_score"]
-    # neighbor_score = meta["neighbor_score"]
-    # pair_index = meta["pair_index"]
-    # for i, pair_index in enumerate(result["pair_index"]):
-    #     topk_index = result["topk_index"].cpu().numpy()
-    #     topk_score = result["topk_score"].cpu().numpy()
-    #     neighbor_score = result["neighbor_score"].cpu().numpy()
-    #     cc_quality = result["cc_quality"].cpu().numpy()
-    # print(topk_index[i].dtype)
-    # print(topk_score[i].dtype)
-    # print(neighbor_score[i].dtype)
-    # db[pair_index] = {
-    #     "topk_index": topk_index[i],
-    #     "topk_score": topk_score[i],
-    #     "neighbor_score": neighbor_score[i],
-    #     "cc_quality": cc_quality[i],
-    # }
-    # db[str(pair_index)] = {
-    #     "topk_index": pickle.dumps(topk_index[i]),
-    #     "topk_score": pickle.dumps(topk_score[i]),
-    #     "neighbor_score": pickle.dumps(neighbor_score[i]),
-    #     "cc_quality": pickle.dumps(cc_quality[i]),
-    # }
-    #     if num % args.buffer_size == 0:
-    #         write_results(results, args.result_path, ccconfig, rank=rank, world_size=world_size)
-    #         num = 0
-    #         results = []
-    # if num > 0:
-    #     write_results(results, args.result_path, ccconfig, rank=rank, world_size=world_size)
+    lock = threading.Lock()
+    with h5py.File(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5"), "w") as fp:
+        with LimitedThreadPoolExecutor(max_workers=16, queue_size=32) as executor:
+            for data in tqdm(dataloader, position=rank, desc=f"CC {rank}/{world_size}"):
+                result = ccmodel(data)
+                if args.mode == "CC":
+                    thread = executor.submit(write_cc_pairs, [result], fp, ccconfig, lock)
+                    threads.append(thread)
 
 
 if __name__ == "__main__":
-    # torch.multiprocessing.set_start_method("spawn")
     args = get_args_parser().parse_args()
     main(args)

@@ -1,11 +1,19 @@
 import datetime
 import errno
 import os
+import queue
 import time
 from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
 
 import torch
 import torch.distributed as dist
+
+
+class LimitedThreadPoolExecutor(ThreadPoolExecutor):
+    def __init__(self, max_workers=None, queue_size=16):
+        super().__init__(max_workers)
+        self._work_queue = queue.Queue(maxsize=queue_size)
 
 
 class SmoothedValue:

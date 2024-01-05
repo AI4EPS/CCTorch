@@ -4,6 +4,7 @@ import json
 import math
 import multiprocessing as mp
 import os
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from multiprocessing import shared_memory
@@ -48,7 +49,7 @@ def write_tm_events(results, result_path, ccconfig, rank=0, world_size=1):
         events.to_csv(result_path / f"cctorch_events_{rank:03d}_{world_size:03d}.csv", index=False)
 
 
-def write_cc_pairs(results, fp, ccconfig, plot_figure=False):
+def write_cc_pairs(results, fp, ccconfig, lock=nullcontext(), plot_figure=False):
     """
     Write cross-correlation results to disk.
     Parameters
@@ -86,16 +87,18 @@ def write_cc_pairs(results, fp, ccconfig, plot_figure=False):
                 topk_index = -topk_index
 
             if f"{id1}/{id2}" not in fp:
-                gp = fp.create_group(f"{id1}/{id2}")
+                with lock:
+                    gp = fp.create_group(f"{id1}/{id2}")
             else:
                 gp = fp[f"{id1}/{id2}"]
 
-            gp.create_dataset(f"cc_index", data=topk_index[i])
-            gp.create_dataset(f"cc_score", data=topk_score[i])
-            gp.create_dataset(f"cc_diff", data=cc_diff[i])
-            gp.create_dataset(f"neighbor_score", data=neighbor_score[i])
-            if cc_sum is not None:
-                gp.create_dataset(f"cc_sum", data=cc_sum[i])
+            with lock:
+                gp.create_dataset(f"cc_index", data=topk_index[i])
+                gp.create_dataset(f"cc_score", data=topk_score[i])
+                gp.create_dataset(f"cc_diff", data=cc_diff[i])
+                gp.create_dataset(f"neighbor_score", data=neighbor_score[i])
+                if cc_sum is not None:
+                    gp.create_dataset(f"cc_sum", data=cc_sum[i])
 
             # if id2 != id1:
             #     fp[f"{id2}/{id1}"] = h5py.SoftLink(f"/{id1}/{id2}")
@@ -123,6 +126,8 @@ def write_cc_pairs(results, fp, ccconfig, plot_figure=False):
                         fig.savefig(f"debug/test_{pair_id[0]}_{pair_id[1]}_{j}.png", dpi=300)
                     print(f"debug/test_{pair_id[0]}_{pair_id[1]}_{j}.png")
                     plt.close(fig)
+
+    return 0
 
     # with h5py.File(result_path / f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5", "a") as fp:
     #     for meta in results:
