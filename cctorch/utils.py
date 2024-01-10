@@ -64,13 +64,13 @@ def write_cc_pairs(results, fp, ccconfig, lock=nullcontext(), plot_figure=False)
     """
 
     for meta in results:
-        topk_index = meta["topk_index"].cpu().numpy()
-        topk_score = meta["topk_score"].cpu().numpy()
-        neighbor_score = meta["neighbor_score"].cpu().numpy()
+        topk_index = meta["topk_index"].numpy()
+        topk_score = meta["topk_score"].numpy()
+        neighbor_score = meta["neighbor_score"].numpy()
         pair_index = meta["pair_index"]
         cc_diff = topk_score[:, :, :, 0] - topk_score[:, :, :, 1]
         if "cc_sum" in meta:
-            cc_sum = meta["cc_sum"].cpu().numpy()
+            cc_sum = meta["cc_sum"].numpy()
         else:
             cc_sum = None
 

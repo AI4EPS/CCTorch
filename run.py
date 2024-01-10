@@ -1,8 +1,8 @@
-import concurrent.futures
 import json
 import logging
 import os
 import threading
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 
 import h5py
@@ -14,7 +14,6 @@ from cctorch.transforms import *
 from cctorch.utils import write_cc_pairs
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from utils import LimitedThreadPoolExecutor
 
 
 def get_args_parser(add_help=True):
@@ -315,15 +314,19 @@ def main(args):
     )
     ccmodel.to(args.device)
 
-    threads = []
-    lock = threading.Lock()
+    MAX_THREADS = 32
     with h5py.File(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5"), "w") as fp:
-        with LimitedThreadPoolExecutor(max_workers=16, queue_size=32) as executor:
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            futures = set()
+            lock = threading.Lock()
             for data in tqdm(dataloader, position=rank, desc=f"CC {rank}/{world_size}"):
                 result = ccmodel(data)
                 if args.mode == "CC":
                     thread = executor.submit(write_cc_pairs, [result], fp, ccconfig, lock)
-                    threads.append(thread)
+                    futures.add(thread)
+                if len(futures) >= MAX_THREADS:
+                    done, futures = wait(futures, return_when=FIRST_COMPLETED)
+            executor.shutdown(wait=True)
 
 
 if __name__ == "__main__":
