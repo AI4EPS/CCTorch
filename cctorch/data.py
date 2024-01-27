@@ -1,6 +1,9 @@
 import itertools
+import logging
+from collections import defaultdict
 from pathlib import Path
 
+import fsspec
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
@@ -152,6 +155,18 @@ class CCIterableDataset(IterableDataset):
             self.data_format2 = self.data_format1
             self.data_path2 = self.data_path1
 
+        if self.mode == "TM":
+            if data_list1 is not None:
+                with open(data_list1, "r") as fp:
+                    self.data_list1 = fp.read().splitlines()
+            else:
+                self.data_list1 = None
+            if data_list2 is not None:
+                with open(data_list2, "r") as fp:
+                    self.data_list2 = fp.read().splitlines()
+            else:
+                self.data_list2 = None
+
         if self.mode == "AN":
             ## For ambient noise, we split chunks in the sampling function
             self.data_list1 = self.data_list1[rank::world_size]
@@ -259,16 +274,18 @@ class CCIterableDataset(IterableDataset):
                             "info": {"shift_index": self.traveltime_index[ii]},
                         }
                     else:
-                        meta1 = read_data(ii, self.data_path1, self.data_format1, mode=self.mode, config=self.config)
+                        meta1 = read_data(
+                            self.data_list1[ii], self.data_path1, self.data_format1, mode=self.mode, config=self.config
+                        )
                         meta1["index"] = ii
                     data = torch.tensor(meta1["data"], dtype=self.dtype).to(self.device)
                     if self.transforms is not None:
                         data = self.transforms(data)
 
                     meta1["data"] = data
-                    local_dict[ii] = meta1
+                    local_dict[ii if self.data_format1 == "memmap" else self.data_list1[ii]] = meta1
                 else:
-                    meta1 = local_dict[ii]
+                    meta1 = local_dict[ii if self.data_format1 == "memmap" else self.data_list1[ii]]
 
                 if jj not in local_dict:
                     if self.data_format2 == "memmap":
@@ -278,16 +295,18 @@ class CCIterableDataset(IterableDataset):
                             "info": {"shift_index": self.traveltime_index[jj]},
                         }
                     else:
-                        meta2 = read_data(jj, self.data_path2, self.data_format2, mode=self.mode, config=self.config)
+                        meta2 = read_data(
+                            self.data_list2[jj], self.data_path2, self.data_format2, mode=self.mode, config=self.config
+                        )
                         meta2["index"] = jj
                     data = torch.tensor(meta2["data"], dtype=self.dtype).to(self.device)
                     if self.transforms is not None:
                         data = self.transforms(data)
 
                     meta2["data"] = data
-                    local_dict[jj] = meta2
+                    local_dict[jj if self.data_format2 == "memmap" else self.data_list2[jj]] = meta2
                 else:
-                    meta2 = local_dict[jj]
+                    meta2 = local_dict[jj if self.data_format2 == "memmap" else self.data_list2[jj]]
 
                 data1.append(meta1["data"])
                 index1.append(meta1["index"])
@@ -518,40 +537,96 @@ def read_data(file_name, data_path, format="h5", mode="CC", config={}):
 
     elif mode == "TM":
         if format == "mseed":
-            data, info = read_mseed(file_name, config.stations, config)
+            data, info = read_mseed(file_name, config=config)
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
     return {"data": data, "info": info}
 
 
-def read_mseed(file_name, stations, config):
-    meta = obspy.read(file_name)
-    meta.merge(fill_value="latest")
-    for tr in meta:
-        if tr.stats.sampling_rate != config.sampling_rate:
-            tr.resample(config.sampling_rate)
-    begin_time = min([tr.stats.starttime for tr in meta])
-    end_time = max([tr.stats.endtime for tr in meta])
-    meta.detrend("constant")
-    meta.trim(begin_time, end_time, pad=True, fill_value=0)
-    nt = meta[0].stats.npts
-    data = np.zeros([3, len(stations), nt])
-    component_mapping = {"1": 2, "2": 1, "3": 0, "E": 0, "N": 1, "Z": 2}
-    for i, sta in stations.iterrows():
-        if len(sta["component"]) == 3:
-            for j, c in enumerate(sta["component"]):
-                st = meta.select(id=f"{sta['station_id']}{c}")
-                data[j, i, :] = st[0].data
-        else:
-            j = component_mapping[sta["component"]]
-            st = meta.select(id=f"{sta['station_id']}{c}")
-            data[j, i, :] = st[0].data
+def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
+    try:
+        stream = obspy.Stream()
+        for tmp in fname.split(","):
+            with fsspec.open(tmp, "rb") as fs:
+                meta = obspy.read(fs, format="MSEED")
+                stream += meta
+            # stream += obspy.read(tmp)
+        stream = stream.merge(fill_value="latest")
+
+    except Exception as e:
+        print(f"Error reading {fname}:\n{e}")
+        return None
+
+    tmp_stream = obspy.Stream()
+    for trace in stream:
+        if len(trace.data) < 10:
+            continue
+
+        ## interpolate to 100 Hz
+        if trace.stats.sampling_rate != sampling_rate:
+            logging.warning(f"Resampling {trace.id} from {trace.stats.sampling_rate} to {sampling_rate} Hz")
+            try:
+                trace = trace.interpolate(sampling_rate, method="linear")
+            except Exception as e:
+                print(f"Error resampling {trace.id}:\n{e}")
+
+        trace = trace.detrend("demean")
+
+        ## detrend
+        # try:
+        #     trace = trace.detrend("spline", order=2, dspline=5 * trace.stats.sampling_rate)
+        # except:
+        #     logging.error(f"Error: spline detrend failed at file {fname}")
+        #     trace = trace.detrend("demean")
+
+        ## highpass filtering > 1Hz
+        if highpass_filter:
+            trace = trace.filter("highpass", freq=1.0)
+
+        tmp_stream.append(trace)
+
+    if len(tmp_stream) == 0:
+        return None
+    stream = tmp_stream
+
+    begin_time = min([st.stats.starttime for st in stream])
+    end_time = max([st.stats.endtime for st in stream])
+    stream = stream.trim(begin_time, end_time, pad=True, fill_value=0)
+
+    comp = ["3", "2", "1", "E", "N", "Z"]
+    comp2idx = {"3": 0, "2": 1, "1": 2, "E": 0, "N": 1, "Z": 2}
+
+    station_ids = defaultdict(list)
+    for tr in stream:
+        station_ids[tr.id[:-1]].append(tr.id[-1])
+        if tr.id[-1] not in comp:
+            print(f"Unknown component {tr.id[-1]}")
+
+    station_keys = sorted(list(station_ids.keys()))
+    nx = len(station_ids)
+    nt = max([len(tr.data) for tr in stream])
+    data = np.zeros([3, nx, nt], dtype=np.float32)
+    for i, sta in enumerate(station_keys):
+        for c in station_ids[sta]:
+            j = comp2idx[c]
+
+            if len(stream.select(id=sta + c)) == 0:
+                print(f"Empty trace: {sta+c} {begin_time}")
+                continue
+
+            trace = stream.select(id=sta + c)[0]
+
+            ## accerleration to velocity
+            if sta[-1] == "N":
+                trace = trace.integrate().filter("highpass", freq=1.0)
+
+            tmp = trace.data.astype("float32")
+            data[j, i, : len(tmp)] = tmp[:nt]
 
     return data, {
         "begin_time": begin_time.datetime,
         "end_time": end_time.datetime,
-        "station_id": stations["station_id"].tolist(),
     }
 
 

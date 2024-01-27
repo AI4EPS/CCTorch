@@ -171,10 +171,7 @@ class DetectPeaks(torch.nn.Module):
 
     def forward(self, meta):
         xcorr = meta["xcorr"]
-        if "nlag" in meta:
-            nlag = meta["nlag"]
-        else:
-            nlag = xcorr.shape[-1] // 2
+        nlag = meta["nlag"]
 
         # nb, nc, nx, nt = xcorr.shape
 

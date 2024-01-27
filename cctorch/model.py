@@ -22,8 +22,9 @@ class CCModel(nn.Module):
         self.nma = config.nma
         self.channel_shift = config.channel_shift
 
-        self.reduce_t = config.reduce_t
-        self.reduce_x = config.reduce_x
+        self.reduce_t = config.reduce_t  # time reduction
+        self.reduce_x = config.reduce_x  # station reduction
+        self.reduce_c = config.reduce_c  # channel reduction
         self.domain = config.domain
         self.mccc = config.mccc
         self.use_pair_index = config.use_pair_index
@@ -74,12 +75,18 @@ class CCModel(nn.Module):
 
         elif self.domain == "time":
             ## using conv1d in time domain
+            if self.normalize:
+                data1 = data1.to(torch.float64)
+                data2 = data2.to(torch.float64)
+
             nb1, nc1, nx1, nt1 = data1.shape
             nb2, nc2, nx2, nt2 = data2.shape
 
+            eps = torch.finfo(data1.dtype).eps * 10.0
+            nlag = nt2 // 2
+
             if self.shift_t:
                 nt_index = torch.arange(nt1).unsqueeze(0).unsqueeze(0).unsqueeze(0)
-
                 shift_index = x2["info"]["shift_index"]
                 shift_index = shift_index.repeat_interleave(
                     3, dim=1
@@ -88,24 +95,30 @@ class CCModel(nn.Module):
                 data1 = data1.gather(-1, shift_index)
 
             if self.normalize:
-                data2 = (data2 - torch.mean(data2, dim=-1, keepdim=True)) / (
-                    torch.std(data2, dim=-1, keepdim=True) + torch.finfo(data1.dtype).eps
-                )
+                data2 = data2 - torch.mean(data2, dim=-1, keepdim=True)
+                data2 = data2 / (torch.std(data2, dim=-1, keepdim=True) + eps)
+                data1 = data1 - torch.mean(data1, dim=-1, keepdim=True)
+                data1 = data1 / (torch.std(data1, dim=-1, keepdim=True) + eps)
 
-            data1 = data1.view(1, nb1 * nc1 * nx1, nt1)
-            data2 = data2.view(nb2 * nc2 * nx2, 1, nt2)
-            xcor = F.conv1d(data1, data2, padding=self.nlag, stride=1, groups=nb1 * nc1 * nx1)
+            data1 = data1.view(1, nb1 * nc1 * nx1, nt1)  # long
+            data2 = data2.view(nb2 * nc2 * nx2, 1, nt2)  # short
+
+            # xcorr
+            data1 = F.pad(data1, (nlag, nt2 - 1 - nlag), mode="constant", value=0)
+            xcor = F.conv1d(data1, data2, stride=1, groups=nb1 * nc1 * nx1) / nt2
 
             if self.normalize:
-                data1_ = F.pad(data1, (nt2 // 2, nt2 - 1 - nt2 // 2), mode="reflect")
-                local_mean = F.avg_pool1d(data1_, nt2, stride=1)
-                local_std = F.lp_pool1d(data1 - local_mean, norm_type=2, kernel_size=nt2, stride=1) * np.sqrt(nt2)
-                xcor = xcor / (local_std + torch.finfo(data1.dtype).eps)
+                EY2 = F.avg_pool1d(data1**2, kernel_size=nt2, stride=1)
+                EYEY = F.avg_pool1d(data1, kernel_size=nt2, stride=1) ** 2
+                std1 = torch.sqrt(torch.clamp(EY2 - EYEY, 0))
+                xcor = xcor / (std1 + eps)
 
             xcor = xcor.view(nb1, nc1, nx1, -1)
 
             if self.reduce_x:
-                xcor = torch.sum(xcor, dim=(-3, -2), keepdim=True)
+                xcor = torch.sum(xcor, dim=(-2), keepdim=True)
+            if self.reduce_c:
+                xcor = torch.mean(xcor, dim=(-3), keepdim=True)
 
         elif self.domain == "stft":
             nb1, nc1, nx1, nt1 = data1.shape
@@ -136,7 +149,7 @@ class CCModel(nn.Module):
         meta = {
             "xcorr": xcor,
             "pair_index": pair_index,
-            "nlag": self.nlag,
+            "nlag": nlag,
             "data1": x1["data"],
             "data2": x2["data"],
             "info1": x1["info"],

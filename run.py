@@ -11,7 +11,7 @@ import torchvision.transforms as T
 import utils
 from cctorch import CCDataset, CCIterableDataset, CCModel
 from cctorch.transforms import *
-from cctorch.utils import write_cc_pairs
+from cctorch.utils import write_cc_pairs, write_tm_detects
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -89,8 +89,9 @@ def get_args_parser(add_help=True):
     parser.add_argument(
         "--reduce_x",
         action="store_true",
-        help="reduce the channel axis of xcor data: only have effect when reduce_t is true",
+        help="reduce the station axis of xcor data: only have effect when reduce_t is true",
     )
+    parser.add_argument("--reduce_c", action="store_true", help="reduce the channel axis of xcor data")
     parser.add_argument(
         "--mccc", action="store_true", help="use mccc to reduce time axis: only have effect when reduce_t is true"
     )
@@ -169,6 +170,7 @@ def main(args):
         nma = (20, 0)
         reduce_t = args.reduce_t
         reduce_x = args.reduce_x
+        reduce_c = args.reduce_c
         channel_shift = args.channel_shift
         mccc = args.mccc
         use_pair_index = True if args.dataset_type == "map" else False
@@ -178,7 +180,7 @@ def main(args):
 
         ## template matching
         shift_t = args.shift_t
-        reduce_x = args.reduce_x
+        reduce_c = args.reduce_c
         normalize = args.normalize
 
         def __init__(self, config):
@@ -190,8 +192,7 @@ def main(args):
 
     ## Sanity check
     if args.mode == "TM":
-        assert ccconfig.shift_t
-        assert ccconfig.nlag == 0
+        pass
 
     if rank == 0:
         #     if os.path.exists(args.result_path):
@@ -243,10 +244,10 @@ def main(args):
     postprocess = []
     if args.mode == "CC":
         ## TODO: add postprocess for cross-correlation
-        postprocess.append(DetectPeaks())
+        postprocess.append(DetectPeaks(vmin=0.6, kernel=3, stride=1, K=3))
         postprocess.append(Reduction())
     elif args.mode == "TM":
-        postprocess.append(DetectTM())
+        postprocess.append(DetectPeaks(vmin=0.6, kernel=301, stride=1, K=3600 // 5))  # assume 100Hz and 1 hour file
     elif args.mode == "AN":
         ## TODO: add postprocess for ambient noise
         pass
@@ -319,10 +320,13 @@ def main(args):
         with ThreadPoolExecutor(max_workers=16) as executor:
             futures = set()
             lock = threading.Lock()
-            for data in tqdm(dataloader, position=rank, desc=f"CC {rank}/{world_size}"):
+            for data in tqdm(dataloader, position=rank, desc=f"{args.mode}: {rank}/{world_size}"):
                 result = ccmodel(data)
                 if args.mode == "CC":
                     thread = executor.submit(write_cc_pairs, [result], fp, ccconfig, lock)
+                    futures.add(thread)
+                if args.mode == "TM":
+                    thread = executor.submit(write_tm_detects, [result], fp, ccconfig, lock)
                     futures.add(thread)
                 if len(futures) >= MAX_THREADS:
                     done, futures = wait(futures, return_when=FIRST_COMPLETED)
