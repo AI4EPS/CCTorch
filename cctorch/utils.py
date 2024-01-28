@@ -66,7 +66,6 @@ def write_tm_detects(results, fp, ccconfig, lock=nullcontext(), plot_figure=Fals
     for meta in results:
         topk_index = meta["topk_index"].numpy()
         topk_score = meta["topk_score"].numpy()
-        neighbor_score = meta["neighbor_score"].numpy()
         pair_index = meta["pair_index"]
 
         nb, nch, nx, nk = topk_index.shape
@@ -74,7 +73,6 @@ def write_tm_detects(results, fp, ccconfig, lock=nullcontext(), plot_figure=Fals
         for i in range(nb):
             if topk_score[i].max() < ccconfig.min_cc_score:
                 continue
-            select_index = np.where(topk_score[i] >= ccconfig.min_cc_score)
 
             pair_id = pair_index[i]
             id1, id2 = pair_id
@@ -86,9 +84,9 @@ def write_tm_detects(results, fp, ccconfig, lock=nullcontext(), plot_figure=Fals
                 gp = fp[f"{id1}/{id2}"]
 
             with lock:
-                gp.create_dataset(f"cc_index", data=topk_index[i, ..., select_index])
-                gp.create_dataset(f"cc_score", data=topk_score[i, ..., select_index])
-                gp.create_dataset(f"neighbor_score", data=neighbor_score[i, ..., select_index])
+                idx = np.where(topk_score[i] >= ccconfig.min_cc_score)
+                gp.create_dataset(f"cc_index", data=topk_index[i][idx])
+                gp.create_dataset(f"cc_score", data=topk_score[i][idx])
 
     return 0
 

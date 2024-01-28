@@ -266,47 +266,61 @@ class CCIterableDataset(IterableDataset):
             num = 0
 
             for ii, jj in zip(row_matrix.data, col_matrix.data):
-                if ii not in local_dict:
-                    if self.data_format1 == "memmap":
+                if self.data_format1 == "memmap":
+                    if ii not in local_dict:
                         meta1 = {
                             "data": self.templates[ii],
                             "index": ii,
                             "info": {"shift_index": self.traveltime_index[ii]},
                         }
+                        data = torch.tensor(meta1["data"], dtype=self.dtype).to(self.device)
+                        if self.transforms is not None:
+                            data = self.transforms(data)
+                        meta1["data"] = data
+                        local_dict[ii] = meta1
                     else:
+                        meta1 = local_dict[ii]
+                else:
+                    if self.data_list1[ii] not in local_dict:
                         meta1 = read_data(
                             self.data_list1[ii], self.data_path1, self.data_format1, mode=self.mode, config=self.config
                         )
                         meta1["index"] = ii
-                    data = torch.tensor(meta1["data"], dtype=self.dtype).to(self.device)
-                    if self.transforms is not None:
-                        data = self.transforms(data)
+                        data = torch.tensor(meta1["data"], dtype=self.dtype).to(self.device)
+                        if self.transforms is not None:
+                            data = self.transforms(data)
+                        meta1["data"] = data
+                        local_dict[self.data_list1[ii]] = meta1
+                    else:
+                        meta1 = local_dict[self.data_list1[ii]]
 
-                    meta1["data"] = data
-                    local_dict[ii if self.data_format1 == "memmap" else self.data_list1[ii]] = meta1
-                else:
-                    meta1 = local_dict[ii if self.data_format1 == "memmap" else self.data_list1[ii]]
-
-                if jj not in local_dict:
-                    if self.data_format2 == "memmap":
+                if self.data_format2 == "memmap":
+                    if jj not in local_dict:
                         meta2 = {
                             "data": self.templates[jj],
                             "index": jj,
                             "info": {"shift_index": self.traveltime_index[jj]},
                         }
+                        data = torch.tensor(meta2["data"], dtype=self.dtype).to(self.device)
+                        if self.transforms is not None:
+                            data = self.transforms(data)
+                        meta2["data"] = data
+                        local_dict[jj] = meta2
                     else:
+                        meta2 = local_dict[jj]
+                else:
+                    if self.data_list2[jj] not in local_dict:
                         meta2 = read_data(
                             self.data_list2[jj], self.data_path2, self.data_format2, mode=self.mode, config=self.config
                         )
                         meta2["index"] = jj
-                    data = torch.tensor(meta2["data"], dtype=self.dtype).to(self.device)
-                    if self.transforms is not None:
-                        data = self.transforms(data)
-
-                    meta2["data"] = data
-                    local_dict[jj if self.data_format2 == "memmap" else self.data_list2[jj]] = meta2
-                else:
-                    meta2 = local_dict[jj if self.data_format2 == "memmap" else self.data_list2[jj]]
+                        data = torch.tensor(meta2["data"], dtype=self.dtype).to(self.device)
+                        if self.transforms is not None:
+                            data = self.transforms(data)
+                        meta2["data"] = data
+                        local_dict[self.data_list2[jj]] = meta2
+                    else:
+                        meta2 = local_dict[self.data_list2[jj]]
 
                 data1.append(meta1["data"])
                 index1.append(meta1["index"])
@@ -319,12 +333,12 @@ class CCIterableDataset(IterableDataset):
                 if num == self.batch_size:
                     data_batch1 = torch.stack(data1)
                     data_batch2 = torch.stack(data2)
-                    if (
-                        (self.mode == "TM")
-                        and (data_batch2.shape[1] != data_batch1.shape[1])
-                        and (data_batch2.shape[1] % data_batch1.shape[1] == 0)
-                    ):
-                        data_batch1 = data_batch1.repeat(1, data_batch2.shape[1] // data_batch1.shape[1], 1, 1)
+                    # if (
+                    #     (self.mode == "TM")
+                    #     and (data_batch2.shape[1] != data_batch1.shape[1])
+                    #     and (data_batch2.shape[1] % data_batch1.shape[1] == 0)
+                    # ):
+                    #     data_batch1 = data_batch1.repeat(1, data_batch2.shape[1] // data_batch1.shape[1], 1, 1)
 
                     info_batch1 = {k: [x[k] for x in info1] for k in info1[0].keys()}
                     info_batch2 = {k: [x[k] for x in info2] for k in info2[0].keys()}
@@ -349,12 +363,12 @@ class CCIterableDataset(IterableDataset):
             if num > 0:
                 data_batch1 = torch.stack(data1)
                 data_batch2 = torch.stack(data2)
-                if (
-                    (self.mode == "TM")
-                    and (data_batch2.shape[1] != data_batch1.shape[1])
-                    and (data_batch2.shape[1] % data_batch1.shape[1] == 0)
-                ):
-                    data_batch1 = data_batch1.repeat(1, data_batch2.shape[1] // data_batch1.shape[1], 1, 1)
+                # if (
+                #     (self.mode == "TM")
+                #     and (data_batch2.shape[1] != data_batch1.shape[1])
+                #     and (data_batch2.shape[1] % data_batch1.shape[1] == 0)
+                # ):
+                #     data_batch1 = data_batch1.repeat(1, data_batch2.shape[1] // data_batch1.shape[1], 1, 1)
                 info_batch1 = {k: [x[k] for x in info1] for k in info1[0].keys()}
                 info_batch2 = {k: [x[k] for x in info2] for k in info2[0].keys()}
                 if "shift_index" in info_batch1:

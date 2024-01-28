@@ -325,9 +325,11 @@ def main(args):
                 if args.mode == "CC":
                     thread = executor.submit(write_cc_pairs, [result], fp, ccconfig, lock)
                     futures.add(thread)
+                    # write_cc_pairs([result], fp, ccconfig, lock)
                 if args.mode == "TM":
                     thread = executor.submit(write_tm_detects, [result], fp, ccconfig, lock)
                     futures.add(thread)
+                    # write_tm_detects([result], fp, ccconfig, lock)
                 if len(futures) >= MAX_THREADS:
                     done, futures = wait(futures, return_when=FIRST_COMPLETED)
             executor.shutdown(wait=True)

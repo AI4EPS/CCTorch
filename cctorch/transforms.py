@@ -184,9 +184,10 @@ class DetectPeaks(torch.nn.Module):
         keep = (smax == xcorr).float()
         topk_scores, topk_inds = torch.topk(xcorr * keep, self.K, sorted=True)
 
-        top_inds = topk_inds[..., 0]
-        nearby = torch.stack([top_inds - 1, top_inds, top_inds + 1], dim=-1).clamp(0, xcorr.shape[-1] - 1)
-        meta["neighbor_score"] = torch.gather(xcorr, -1, nearby)
+        if self.K == 3: # CC pairs
+            top_inds = topk_inds[..., 0]
+            nearby = torch.stack([top_inds - 1, top_inds, top_inds + 1], dim=-1).clamp(0, xcorr.shape[-1] - 1)
+            meta["neighbor_score"] = torch.gather(xcorr, -1, nearby)
 
         meta["topk_score"] = topk_scores
         meta["topk_index"] = topk_inds - nlag
