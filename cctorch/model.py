@@ -105,13 +105,13 @@ class CCModel(nn.Module):
 
             # xcorr
             data1 = F.pad(data1, (nlag, nt2 - 1 - nlag), mode="constant", value=0)
-            xcor = F.conv1d(data1, data2, stride=1, groups=nb1 * nc1 * nx1) / nt2
+            xcor = F.conv1d(data1, data2, stride=1, groups=nb1 * nc1 * nx1)
 
             if self.normalize:
                 EY2 = F.avg_pool1d(data1**2, kernel_size=nt2, stride=1)
                 EYEY = F.avg_pool1d(data1, kernel_size=nt2, stride=1) ** 2
                 std1 = torch.sqrt(torch.clamp(EY2 - EYEY, 0))
-                xcor = xcor / (std1 + eps)
+                xcor = xcor / nt2 / (std1 + eps)
 
             xcor = xcor.view(nb1, nc1, nx1, -1)
 
