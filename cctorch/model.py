@@ -87,7 +87,7 @@ class CCModel(nn.Module):
 
             if self.shift_t:
                 nt_index = torch.arange(nt1).unsqueeze(0).unsqueeze(0).unsqueeze(0)
-                shift_index = x2["info"]["shift_index"]
+                shift_index = x2["info"]["traveltime_index"]
                 shift_index = shift_index.repeat_interleave(
                     3, dim=1
                 )  # repeat to match three channels for P and S wave templates

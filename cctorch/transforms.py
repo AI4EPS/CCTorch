@@ -9,6 +9,7 @@ from scipy import sparse
 from scipy.signal import tukey
 from scipy.sparse.linalg import lsmr
 from tqdm import tqdm
+from scipy.interpolate import CubicSpline
 
 
 #### Common ####
@@ -162,35 +163,65 @@ def fft_real_normalize(x):
 
 
 class DetectPeaks(torch.nn.Module):
-    def __init__(self, vmin=0.3, kernel=3, stride=1, K=3):
+    def __init__(self, kernel=3, stride=1, topk=2, vabs=True, interp=True, sampling_rate=100.0):
         super().__init__()
-        self.vmin = vmin
         self.kernel = kernel
         self.stride = stride
-        self.K = K
+        self.topk = topk
+        self.vabs = vabs
+        self.interp = interp
+        self.sampling_rate = sampling_rate
 
     def forward(self, meta):
         xcorr = meta["xcorr"]
         nlag = meta["nlag"]
-
-        # nb, nc, nx, nt = xcorr.shape
+        nb, nc, nx, nt = xcorr.shape
 
         ## consider both positive and negative peaks
-        # smax = F.max_pool2d(torch.abs(xcorr), (1, self.kernel), stride=(1, self.stride), padding=(0, self.kernel // 2))
+        if self.vabs:
+            xcorr = torch.abs(xcorr)
 
-        ## only consider positive peaks
         smax = F.max_pool2d(xcorr, (1, self.kernel), stride=(1, self.stride), padding=(0, self.kernel // 2))
 
         keep = (smax == xcorr).float()
-        topk_scores, topk_inds = torch.topk(xcorr * keep, self.K, sorted=True)
+        topk_score, topk_idx = torch.topk(xcorr * keep, self.topk, sorted=True)  # nb, nc, nx, k
+        topk_score, topk_idx = topk_score.cpu().numpy(), topk_idx.cpu().numpy()
 
-        if self.K == 3: # CC pairs
-            top_inds = topk_inds[..., 0]
-            nearby = torch.stack([top_inds - 1, top_inds, top_inds + 1], dim=-1).clamp(0, xcorr.shape[-1] - 1)
-            meta["neighbor_score"] = torch.gather(xcorr, -1, nearby)
+        weight = (0.1 + 3.0 * (topk_score[..., 0] - topk_score[..., 1])) * topk_score[..., 0] ** 2  # nb, nc, nx
+        topk_score = topk_score[..., 0]  # nb, nc, nx
+        topk_idx = topk_idx[..., 0]  # nb, nc, nx
 
-        meta["topk_score"] = topk_scores
-        meta["topk_index"] = topk_inds - nlag
+        if self.interp:
+            neighbor_index = np.clip(topk_idx[:, :, :, None] + np.array([-1, 0, 1]), 0, nt - 1)
+            neighbor_score = np.take_along_axis(xcorr.cpu().numpy(), neighbor_index, axis=-1)
+            x = np.array([-1, 0, 1])
+            y = neighbor_score  # nb, nc, nx, 3
+            spl = CubicSpline(x, y, axis=-1)
+            x_ = np.linspace(-1, 1, 101)
+            y_ = spl(x_)  # nb, nc, nx, 101
+            ii = np.argmax(y_, axis=-1, keepdims=True)  # nb, nc, nx, 1
+            sub_shift = np.take_along_axis(x_[np.newaxis, np.newaxis, np.newaxis, :], ii, axis=-1).squeeze(
+                -1
+            )  # nb, nc, nx
+            topk_idx = topk_idx + sub_shift
+            topk_score = np.take_along_axis(y_, ii, axis=-1).squeeze(-1)  # nb, nc, nx
+
+        idx = np.argmax(weight, axis=1, keepdims=True)  # nb, 1, nx
+        max_cc = np.take_along_axis(topk_score, idx, axis=1)  # nb, 1, nx
+        shift_idx = np.take_along_axis(topk_idx, idx, axis=1)  # nb, 1, nx
+        weight = np.take_along_axis(weight, idx, axis=1)  # nb, 1, nx
+        shift_idx -= nlag
+
+        shift_t = shift_idx / self.sampling_rate
+        if ("traveltime" in meta["info1"]) and ("traveltime" in meta["info2"]):
+            delta_tt = meta["info1"]["traveltime"] - meta["info2"]["traveltime"]
+            delta_tt = np.take_along_axis(delta_tt, idx, axis=1)  # nb, 1, nx
+            shift_t += delta_tt
+
+        meta["cc_max"] = max_cc
+        meta["cc_weight"] = weight
+        meta["cc_dt"] = shift_t
+        meta["cc_shift"] = shift_idx
 
         return meta
 

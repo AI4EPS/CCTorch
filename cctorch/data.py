@@ -154,6 +154,8 @@ class CCIterableDataset(IterableDataset):
             self.symmetric = True
             self.data_format2 = self.data_format1
             self.data_path2 = self.data_path1
+            self.data_list1 = pd.read_csv(data_list1).set_index("idx_pick")
+            self.data_list2 = self.data_list1
 
         if self.mode == "TM":
             if data_list1 is not None:
@@ -190,15 +192,27 @@ class CCIterableDataset(IterableDataset):
                 mode="r",
                 shape=tuple(config.template_shape),
             )
+            self.traveltime = np.memmap(
+                config.traveltime_file,
+                dtype=np.float32,
+                mode="r",
+                shape=tuple(config.traveltime_shape),
+            )
             self.traveltime_index = np.memmap(
                 config.traveltime_index_file,
                 dtype=np.int32,
                 mode="r",
                 shape=tuple(config.traveltime_shape),
             )
-            config.stations = pd.read_csv(
-                config.station_index_file, header=None, names=["index", "station_id", "component"], index_col=0
+            self.traveltime_mask = np.memmap(
+                config.traveltime_mask_file,
+                dtype=bool,
+                mode="r",
+                shape=tuple(config.traveltime_shape),
             )
+            # config.stations = pd.read_csv(
+            #     config.station_index_file, header=None, names=["index", "station_id", "component"], index_col=0
+            # )
 
     def read_pairs(self, pair_list):
         """
@@ -271,7 +285,14 @@ class CCIterableDataset(IterableDataset):
                         meta1 = {
                             "data": self.templates[ii],
                             "index": ii,
-                            "info": {"shift_index": self.traveltime_index[ii]},
+                            "info": {
+                                "idx_eve": self.data_list1.loc[ii, "idx_eve"],
+                                "idx_sta": self.data_list1.loc[ii, "idx_sta"],
+                                "phase_type": self.data_list1.loc[ii, "phase_type"],
+                                "traveltime": self.traveltime[ii],
+                                "traveltime_mask": self.traveltime_mask[ii],
+                                "traveltime_index": self.traveltime_index[ii],
+                            },
                         }
                         data = torch.tensor(meta1["data"], dtype=self.dtype).to(self.device)
                         if self.transforms is not None:
@@ -299,7 +320,14 @@ class CCIterableDataset(IterableDataset):
                         meta2 = {
                             "data": self.templates[jj],
                             "index": jj,
-                            "info": {"shift_index": self.traveltime_index[jj]},
+                            "info": {
+                                "idx_eve": self.data_list1.loc[jj, "idx_eve"],
+                                "idx_sta": self.data_list1.loc[jj, "idx_sta"],
+                                "phase_type": self.data_list1.loc[jj, "phase_type"],
+                                "traveltime": self.traveltime[jj],
+                                "traveltime_mask": self.traveltime_mask[jj],
+                                "traveltime_index": self.traveltime_index[jj],
+                            },
                         }
                         data = torch.tensor(meta2["data"], dtype=self.dtype).to(self.device)
                         if self.transforms is not None:
@@ -342,15 +370,20 @@ class CCIterableDataset(IterableDataset):
 
                     info_batch1 = {k: [x[k] for x in info1] for k in info1[0].keys()}
                     info_batch2 = {k: [x[k] for x in info2] for k in info2[0].keys()}
-                    if "shift_index" in info_batch1:
-                        info_batch1["shift_index"] = torch.tensor(
-                            np.stack(info_batch1["shift_index"]), dtype=torch.int64
-                        )
-                    if "shift_index" in info_batch2:
-                        info_batch2["shift_index"] = torch.tensor(
-                            np.stack(info_batch2["shift_index"]), dtype=torch.int64
-                        )
-                    yield {"data": data_batch1, "index": index1, "info": info_batch1}, {
+                    if "traveltime" in info_batch1:
+                        info_batch1["traveltime"] = np.stack(info_batch1["traveltime"])
+                        info_batch1["traveltime_mask"] = np.stack(info_batch1["traveltime_mask"])
+                        info_batch1["traveltime_index"] = np.stack(info_batch1["traveltime_index"])
+                    if "traveltime" in info_batch2:
+                        info_batch2["traveltime"] = np.stack(info_batch2["traveltime"])
+                        info_batch2["traveltime_mask"] = np.stack(info_batch2["traveltime_mask"])
+                        info_batch2["traveltime_index"] = np.stack(info_batch2["traveltime_index"])
+
+                    yield {
+                        "data": data_batch1,
+                        "index": index1,
+                        "info": info_batch1,
+                    }, {
                         "data": data_batch2,
                         "index": index2,
                         "info": info_batch2,
@@ -371,11 +404,20 @@ class CCIterableDataset(IterableDataset):
                 #     data_batch1 = data_batch1.repeat(1, data_batch2.shape[1] // data_batch1.shape[1], 1, 1)
                 info_batch1 = {k: [x[k] for x in info1] for k in info1[0].keys()}
                 info_batch2 = {k: [x[k] for x in info2] for k in info2[0].keys()}
-                if "shift_index" in info_batch1:
-                    info_batch1["shift_index"] = torch.tensor(np.stack(info_batch1["shift_index"]), dtype=torch.int64)
-                if "shift_index" in info_batch2:
-                    info_batch2["shift_index"] = torch.tensor(np.stack(info_batch2["shift_index"]), dtype=torch.int64)
-                yield {"data": data_batch1, "index": index1, "info": info_batch1}, {
+                if "traveltime" in info_batch1:
+                    info_batch1["traveltime"] = np.stack(info_batch1["traveltime"])
+                    info_batch1["traveltime_mask"] = np.stack(info_batch1["traveltime_mask"])
+                    info_batch1["traveltime_index"] = np.stack(info_batch1["traveltime_index"])
+                if "traveltime" in info_batch2:
+                    info_batch2["traveltime"] = np.stack(info_batch2["traveltime"])
+                    info_batch2["traveltime_mask"] = np.stack(info_batch2["traveltime_mask"])
+                    info_batch2["traveltime_index"] = np.stack(info_batch2["traveltime_index"])
+
+                yield {
+                    "data": data_batch1,
+                    "index": index1,
+                    "info": info_batch1,
+                }, {
                     "data": data_batch2,
                     "index": index2,
                     "info": info_batch2,

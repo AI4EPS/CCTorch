@@ -14,6 +14,8 @@ from cctorch.transforms import *
 from cctorch.utils import write_cc_pairs, write_tm_detects
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+import pandas as pd
+import matplotlib.pyplot as plt
 
 
 def get_args_parser(add_help=True):
@@ -79,6 +81,9 @@ def get_args_parser(add_help=True):
     parser.add_argument("--temporal_gradient", action="store_true", help="use temporal gradient")
 
     # cross-correlation parameters
+    parser.add_argument("--picks_csv", default="local/cctorch/cctorch_picks.csv", type=str, help="picks file")
+    parser.add_argument("--events_csv", default="local/cctorch/cctorch_events.csv", type=str, help="events file")
+    parser.add_argument("--stations_csv", default="local/cctorch/cctorch_stations.csv", type=str, help="stations file")
     parser.add_argument("--taper", action="store_true", help="taper two data window")
     parser.add_argument("--interp", action="store_true", help="interpolate the data window along time axs")
     parser.add_argument("--scale_factor", default=10, type=int, help="interpolation scale up factor")
@@ -174,9 +179,11 @@ def main(args):
         channel_shift = args.channel_shift
         mccc = args.mccc
         use_pair_index = True if args.dataset_type == "map" else False
-        min_cc_score = 0.6
-        min_cc_ratio = 0.0  ## ratio is defined as the portion of channels with cc score larger than min_cc_score
-        min_cc_diff = 0.0  ## the weight is defined as the difference between largest and second largest cc score
+        # filtering
+        min_cc = 0.5
+        max_shift = {"P": int(0.5 * fs), "S": int(0.85 * fs)}
+        max_obs = 100
+        min_obs = 8
 
         ## template matching
         shift_t = args.shift_t
@@ -244,8 +251,7 @@ def main(args):
     postprocess = []
     if args.mode == "CC":
         ## TODO: add postprocess for cross-correlation
-        postprocess.append(DetectPeaks(vmin=0.6, kernel=3, stride=1, K=3))
-        postprocess.append(Reduction())
+        postprocess.append(DetectPeaks(kernel=3, stride=1, topk=2))
     elif args.mode == "TM":
         postprocess.append(DetectPeaks(vmin=0.6, kernel=301, stride=1, K=3600 // 5))  # assume 100Hz and 1 hour file
     elif args.mode == "AN":
@@ -304,6 +310,7 @@ def main(args):
         num_workers=args.workers if args.dataset_type == "map" else 0,
         sampler=sampler if args.dataset_type == "map" else None,
         pin_memory=False,
+        collate_fn=lambda x: x,
     )
 
     ccmodel = CCModel(
@@ -315,24 +322,108 @@ def main(args):
     )
     ccmodel.to(args.device)
 
-    MAX_THREADS = 32
-    with h5py.File(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5"), "w") as fp:
-        with ThreadPoolExecutor(max_workers=16) as executor:
-            futures = set()
-            lock = threading.Lock()
-            for data in tqdm(dataloader, position=rank, desc=f"{args.mode}: {rank}/{world_size}"):
-                result = ccmodel(data)
-                if args.mode == "CC":
-                    thread = executor.submit(write_cc_pairs, [result], fp, ccconfig, lock)
-                    futures.add(thread)
-                    # write_cc_pairs([result], fp, ccconfig, lock)
-                if args.mode == "TM":
-                    thread = executor.submit(write_tm_detects, [result], fp, ccconfig, lock)
-                    futures.add(thread)
-                    # write_tm_detects([result], fp, ccconfig, lock)
-                if len(futures) >= MAX_THREADS:
-                    done, futures = wait(futures, return_when=FIRST_COMPLETED)
-            executor.shutdown(wait=True)
+    if args.mode == "CC":
+        picks = pd.read_csv(args.picks_csv)
+        picks.set_index("idx_pick", inplace=True)
+        events = pd.read_csv(args.events_csv)
+        stations = pd.read_csv(args.stations_csv)
+
+    result_df = []
+    for i, data in enumerate(tqdm(dataloader)):
+
+        idx_eve1 = data[0]["info"]["idx_eve"]
+        idx_eve2 = data[1]["info"]["idx_eve"]
+        idx_sta = data[0]["info"]["idx_sta"]
+        phase_type = data[0]["info"]["phase_type"]
+
+        result = ccmodel(data)
+
+        cc_max = result["cc_max"]
+        cc_weight = result["cc_weight"]
+        cc_shift = result["cc_shift"]
+        cc_dt = result["cc_dt"]
+
+        for ii in range(len(idx_eve1)):
+            result_df.append(
+                {
+                    "idx_eve1": idx_eve1[ii],
+                    "idx_eve2": idx_eve2[ii],
+                    "idx_sta": idx_sta[ii],
+                    "phase_type": phase_type[ii],
+                    "dt": cc_dt[ii].squeeze().item(),
+                    "shift": cc_shift[ii].squeeze().item(),
+                    "cc": cc_max[ii].squeeze().item(),
+                    "weight": cc_weight[ii].squeeze().item(),
+                }
+            )
+
+    if ccconfig.mode == "CC":
+
+        # %%
+        result_df = pd.DataFrame(result_df)
+        result_df.to_csv(
+            os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}_origin.csv"), index=False
+        )
+
+        # %% filter based on cc values
+        result_df = result_df[
+            (result_df["cc"] >= ccconfig.min_cc)
+            & (result_df["shift"].abs() <= result_df["phase_type"].map(ccconfig.max_shift))
+        ]
+
+        # %% merge different instrument types of the same stations
+        stations["network_station"] = stations["network"] + "." + stations["station"]
+        result_df = result_df.merge(stations[["network_station", "idx_sta"]], on="idx_sta", how="left")
+        result_df.sort_values("weight", ascending=False, inplace=True)
+        result_df = result_df.groupby(["idx_eve1", "idx_eve2", "network_station", "phase_type"]).first().reset_index()
+        result_df.drop(columns=["network_station"], inplace=True)
+
+        # %% filter based on cc observations
+        result_df = (
+            result_df.groupby(["idx_eve1", "idx_eve2"])
+            .apply(lambda x: (x.nlargest(ccconfig.max_obs, "weight") if len(x) >= ccconfig.min_obs else None))
+            .reset_index(drop=True)
+        )
+
+        # %%
+        event_idx_dict = events["event_index"].to_dict()  ##  faster than using .loc
+        station_id_dict = stations["station"].to_dict()
+
+        # %%
+        result_df.to_csv(
+            os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.csv"), index=False
+        )
+
+        # %% write to cc file
+        with open(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}_dt.cc"), "w") as fp:
+            for (i, j), record in tqdm(result_df.groupby(["idx_eve1", "idx_eve2"])):
+                event_idx1 = event_idx_dict[i]
+                event_idx2 = event_idx_dict[j]
+                fp.write(f"# {event_idx1} {event_idx2} 0.000\n")
+                for k, record_ in record.iterrows():
+                    idx_sta = record_["idx_sta"]
+                    station_id = station_id_dict[idx_sta]
+                    phase_type = record_["phase_type"]
+                    fp.write(f"{station_id} {record_['dt']: .4f} {record_['weight']:.4f} {phase_type}\n")
+
+    # MAX_THREADS = 32
+    # with h5py.File(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5"), "w") as fp:
+    #     with ThreadPoolExecutor(max_workers=16) as executor:
+    #         futures = set()
+    #         lock = threading.Lock()
+    #         for data in tqdm(dataloader, position=rank, desc=f"{args.mode}: {rank}/{world_size}"):
+    #             result = ccmodel(data)
+    #             if args.mode == "CC":
+    #                 thread = executor.submit(write_cc_pairs, [result], fp, ccconfig, lock)
+    #                 futures.add(thread)
+    #                 # write_cc_pairs([result], fp, ccconfig, lock)
+    #             if args.mode == "TM":
+    #                 thread = executor.submit(write_tm_detects, [result], fp, ccconfig, lock)
+    #                 futures.add(thread)
+    #                 # write_tm_detects([result], fp, ccconfig, lock)
+    #             if len(futures) >= MAX_THREADS:
+    #                 done, futures = wait(futures, return_when=FIRST_COMPLETED)
+    #         executor.shutdown(wait=True)
 
 
 if __name__ == "__main__":
