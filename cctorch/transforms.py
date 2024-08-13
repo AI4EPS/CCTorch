@@ -197,7 +197,7 @@ class DetectPeaks(torch.nn.Module):
             x = np.array([-1, 0, 1])
             y = neighbor_score  # nb, nc, nx, 3
             spl = CubicSpline(x, y, axis=-1)
-            x_ = np.linspace(-1, 1, 101)
+            x_ = np.linspace(-1, 1, 201)
             y_ = spl(x_)  # nb, nc, nx, 101
             ii = np.argmax(y_, axis=-1, keepdims=True)  # nb, nc, nx, 1
             sub_shift = np.take_along_axis(x_[np.newaxis, np.newaxis, np.newaxis, :], ii, axis=-1).squeeze(
@@ -205,6 +205,8 @@ class DetectPeaks(torch.nn.Module):
             )  # nb, nc, nx
             topk_idx = topk_idx + sub_shift
             topk_score = np.take_along_axis(y_, ii, axis=-1).squeeze(-1)  # nb, nc, nx
+
+            # print(f"sub_shift: {sub_shift}, topk_idx: {topk_idx}, topk_score: {topk_score}")
 
         idx = np.argmax(weight, axis=1, keepdims=True)  # nb, 1, nx
         max_cc = np.take_along_axis(topk_score, idx, axis=1)  # nb, 1, nx
