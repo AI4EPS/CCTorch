@@ -6,17 +6,18 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 
 import h5py
+import matplotlib.pyplot as plt
+import pandas as pd
 import torch
+import torch.distributed as dist
 import torchvision.transforms as T
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
 import utils
 from cctorch import CCDataset, CCIterableDataset, CCModel
 from cctorch.transforms import *
 from cctorch.utils import write_cc_pairs, write_tm_detects
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-import pandas as pd
-import matplotlib.pyplot as plt
-import torch.distributed as dist
 
 
 def get_args_parser(add_help=True):
@@ -330,7 +331,7 @@ def main(args):
         stations = pd.read_csv(args.stations_csv)
 
     result_df = []
-    for i, data in enumerate(tqdm(dataloader)):
+    for i, data in enumerate(tqdm(dataloader, position=rank, desc=f"{rank}/{world_size}: computing")):
 
         idx_eve1 = data[0]["info"]["idx_eve"]
         idx_eve2 = data[1]["info"]["idx_eve"]
@@ -368,6 +369,24 @@ def main(args):
                 os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}_origin.csv"), index=False
             )
 
+        ##### More accurate by merging all results
+        # if world_size > 1:
+        #     dist.barrier()
+
+        # if rank == 0:
+        #     result_df = []
+        #     for i in tqdm(range(world_size), desc="Merging"):
+        #         if os.path.exists(
+        #             os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}_origin.csv")
+        #         ):
+        #             result_df.append(
+        #                 pd.read_csv(
+        #                     os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}_origin.csv")
+        #                 )
+        #             )
+        #     result_df = pd.concat(result_df)
+
+            ### Efficient but less accurate when event pairs split into different files
             # %% filter based on cc values
             result_df = result_df[
                 (result_df["cc"] >= ccconfig.min_cc)
@@ -401,7 +420,9 @@ def main(args):
 
             # %% write to cc file
             with open(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}_dt.cc"), "w") as fp:
-                for (i, j), record in tqdm(result_df.groupby(["idx_eve1", "idx_eve2"])):
+                for (i, j), record in tqdm(
+                    result_df.groupby(["idx_eve1", "idx_eve2"]), desc=f"{rank}/{world_size} writing"
+                ):
                     event_idx1 = event_idx_dict[i]
                     event_idx2 = event_idx_dict[j]
                     fp.write(f"# {event_idx1} {event_idx2} 0.000\n")
@@ -414,7 +435,9 @@ def main(args):
         if world_size > 1:
             dist.barrier()
             if rank == 0:
-                os.system(f"cat {args.result_path}/*_{world_size:03d}_dt.cc > {args.result_path}/dt.cc")
+                os.system(
+                    f"cat {args.result_path}/CC_*_{world_size:03d}_dt.cc > {args.result_path}/CC_{world_size:03d}_dt.cc"
+                )
 
     # MAX_THREADS = 32
     # with h5py.File(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5"), "w") as fp:
