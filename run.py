@@ -469,17 +469,6 @@ def main(args):
         if len(result_df) > 0:
             result_df = pd.DataFrame(result_df)
             result_df.to_csv(
-                os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}_origin.csv"), index=False
-            )
-
-            t0 = result_df["origin_time"].min()
-            result_df["timestamp"] = result_df["origin_time"].apply(lambda x: (x - t0).total_seconds())
-            clustering = DBSCAN(eps=2, min_samples=3).fit(result_df[["timestamp"]].values)
-            result_df["event_index"] = clustering.labels_
-            result_df["event_time"] = result_df.groupby("event_index")["timestamp"].transform("median")
-            result_df["event_time"] = result_df["event_time"].apply(lambda x: t0 + pd.Timedelta(seconds=x))
-            result_df.sort_values(by="event_time", inplace=True)
-            result_df.to_csv(
                 os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.csv"), index=False
             )
 
@@ -494,9 +483,22 @@ def main(args):
                         pd.read_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}.csv"))
                     )
             result_df = pd.concat(result_df)
+
+            result_df["origin_time"] = pd.to_datetime(result_df["origin_time"])
+            t0 = result_df["origin_time"].min()
+            result_df["timestamp"] = result_df["origin_time"].apply(lambda x: (x - t0).total_seconds())
+            clustering = DBSCAN(eps=2, min_samples=3).fit(result_df[["timestamp"]].values)
+            result_df["event_index"] = clustering.labels_
+            result_df["event_time"] = result_df.groupby("event_index")["timestamp"].transform("median")
+            result_df["event_time"] = result_df["event_time"].apply(lambda x: t0 + pd.Timedelta(seconds=x))
             result_df.sort_values(by="event_time", inplace=True)
             result_df.to_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{world_size:03d}.csv"), index=False)
-            result_df = result_df[["event_index", "event_time"]].drop_duplicates()
+            result_df = result_df[["event_index", "event_time", "cc"]]
+            result_df = result_df.groupby("event_index").agg(
+                {"event_time": "first", "cc": "median", "event_index": "count"}
+            )
+            result_df = result_df.rename(columns={"event_index": "num_picks"})
+            result_df.sort_values(by="event_time", inplace=True)
             result_df.to_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{world_size:03d}_event.csv"), index=False)
 
     # MAX_THREADS = 32
