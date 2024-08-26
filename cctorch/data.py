@@ -159,13 +159,19 @@ class CCIterableDataset(IterableDataset):
 
         if self.mode == "TM":
             if data_list1 is not None:
-                with open(data_list1, "r") as fp:
-                    self.data_list1 = fp.read().splitlines()
+                if data_list1.endswith(".txt"):
+                    with open(data_list1, "r") as fp:
+                        self.data_list1 = fp.read().splitlines()
+                else:
+                    self.data_list1 = pd.read_csv(data_list1).set_index("idx_pick")
             else:
                 self.data_list1 = None
             if data_list2 is not None:
-                with open(data_list2, "r") as fp:
-                    self.data_list2 = fp.read().splitlines()
+                if data_list2.endswith(".txt"):
+                    with open(data_list2, "r") as fp:
+                        self.data_list2 = fp.read().splitlines()
+                else:
+                    self.data_list2 = pd.read_csv(data_list2).set_index("idx_pick")
             else:
                 self.data_list2 = None
 
@@ -321,9 +327,9 @@ class CCIterableDataset(IterableDataset):
                             "data": self.templates[jj],
                             "index": jj,
                             "info": {
-                                "idx_eve": self.data_list1.loc[jj, "idx_eve"],
-                                "idx_sta": self.data_list1.loc[jj, "idx_sta"],
-                                "phase_type": self.data_list1.loc[jj, "phase_type"],
+                                "idx_eve": self.data_list2.loc[jj, "idx_eve"],
+                                "idx_sta": self.data_list2.loc[jj, "idx_sta"],
+                                "phase_type": self.data_list2.loc[jj, "phase_type"],
                                 "traveltime": self.traveltime[jj],
                                 "traveltime_mask": self.traveltime_mask[jj],
                                 "traveltime_index": self.traveltime_index[jj],
@@ -378,6 +384,8 @@ class CCIterableDataset(IterableDataset):
                         info_batch2["traveltime"] = np.stack(info_batch2["traveltime"])
                         info_batch2["traveltime_mask"] = np.stack(info_batch2["traveltime_mask"])
                         info_batch2["traveltime_index"] = np.stack(info_batch2["traveltime_index"])
+                    if "begin_time" in info_batch1:
+                        info_batch1["begin_time"] = np.stack(info_batch1["begin_time"])
 
                     yield {
                         "data": data_batch1,
@@ -412,6 +420,8 @@ class CCIterableDataset(IterableDataset):
                     info_batch2["traveltime"] = np.stack(info_batch2["traveltime"])
                     info_batch2["traveltime_mask"] = np.stack(info_batch2["traveltime_mask"])
                     info_batch2["traveltime_index"] = np.stack(info_batch2["traveltime_index"])
+                if "begin_time" in info_batch1:
+                    info_batch1["begin_time"] = np.stack(info_batch1["begin_time"])
 
                 yield {
                     "data": data_batch1,
@@ -680,9 +690,13 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
             tmp = trace.data.astype("float32")
             data[j, i, : len(tmp)] = tmp[:nt]
 
+    # return data, {
+    #     "begin_time": begin_time.datetime,  # .strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+    #     "end_time": end_time.datetime,  # .strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+    # }
     return data, {
-        "begin_time": begin_time.datetime,
-        "end_time": end_time.datetime,
+        "begin_time": np.datetime64(begin_time.datetime),
+        "end_time": np.datetime64(end_time.datetime),
     }
 
 

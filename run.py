@@ -11,13 +11,13 @@ import pandas as pd
 import torch
 import torch.distributed as dist
 import torchvision.transforms as T
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-
 import utils
 from cctorch import CCDataset, CCIterableDataset, CCModel
 from cctorch.transforms import *
 from cctorch.utils import write_cc_pairs, write_tm_detects
+from sklearn.cluster import DBSCAN
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 
 def get_args_parser(add_help=True):
@@ -83,9 +83,9 @@ def get_args_parser(add_help=True):
     parser.add_argument("--temporal_gradient", action="store_true", help="use temporal gradient")
 
     # cross-correlation parameters
-    parser.add_argument("--picks_csv", default="local/cctorch/cctorch_picks.csv", type=str, help="picks file")
-    parser.add_argument("--events_csv", default="local/cctorch/cctorch_events.csv", type=str, help="events file")
-    parser.add_argument("--stations_csv", default="local/cctorch/cctorch_stations.csv", type=str, help="stations file")
+    parser.add_argument("--picks_csv", default="cctorch_picks.csv", type=str, help="picks file")
+    parser.add_argument("--events_csv", default="cctorch_events.csv", type=str, help="events file")
+    parser.add_argument("--stations_csv", default="cctorch_stations.csv", type=str, help="stations file")
     parser.add_argument("--taper", action="store_true", help="taper two data window")
     parser.add_argument("--interp", action="store_true", help="interpolate the data window along time axs")
     parser.add_argument("--scale_factor", default=10, type=int, help="interpolation scale up factor")
@@ -253,9 +253,11 @@ def main(args):
     postprocess = []
     if args.mode == "CC":
         ## TODO: add postprocess for cross-correlation
-        postprocess.append(DetectPeaks(kernel=3, stride=1, topk=2))
+        postprocess.append(DetectPeaksCC(kernel=3, stride=1, topk=2))
     elif args.mode == "TM":
-        postprocess.append(DetectPeaks(vmin=0.6, kernel=301, stride=1, K=3600 // 5))  # assume 100Hz and 1 hour file
+        postprocess.append(
+            DetectPeaksTM(vmin=0.6, kernel=301, stride=1, topk=3600 // 5)
+        )  # assume 100Hz and 1 hour file
     elif args.mode == "AN":
         ## TODO: add postprocess for ambient noise
         pass
@@ -333,31 +335,54 @@ def main(args):
     result_df = []
     for i, data in enumerate(tqdm(dataloader, position=rank, desc=f"{rank}/{world_size}: computing")):
 
-        idx_eve1 = data[0]["info"]["idx_eve"]
-        idx_eve2 = data[1]["info"]["idx_eve"]
-        idx_sta = data[0]["info"]["idx_sta"]
-        phase_type = data[0]["info"]["phase_type"]
+        if args.mode == "CC":
+            idx_eve1 = data[0]["info"]["idx_eve"]
+            idx_eve2 = data[1]["info"]["idx_eve"]
+        if args.mode == "TM":
+            idx_mseed = data[0]["index"]
+            idx_eve = data[1]["info"]["idx_eve"]
+        idx_sta = data[1]["info"]["idx_sta"]
+        phase_type = data[1]["info"]["phase_type"]
 
         result = ccmodel(data)
 
-        cc_max = result["cc_max"]
-        cc_weight = result["cc_weight"]
-        cc_shift = result["cc_shift"]
-        cc_dt = result["cc_dt"]
+        if args.mode == "CC":
+            cc_max = result["cc_max"]
+            cc_weight = result["cc_weight"]
+            cc_shift = result["cc_shift"]
+            cc_dt = result["cc_dt"]
+            for ii in range(len(idx_sta)):
+                result_df.append(
+                    {
+                        "idx_eve1": idx_eve1[ii],
+                        "idx_eve2": idx_eve2[ii],
+                        "idx_sta": idx_sta[ii],
+                        "phase_type": phase_type[ii],
+                        "dt": cc_dt[ii].squeeze().item(),
+                        "shift": cc_shift[ii].squeeze().item(),
+                        "cc": cc_max[ii].squeeze().item(),
+                        "weight": cc_weight[ii].squeeze().item(),
+                    }
+                )
 
-        for ii in range(len(idx_eve1)):
-            result_df.append(
-                {
-                    "idx_eve1": idx_eve1[ii],
-                    "idx_eve2": idx_eve2[ii],
-                    "idx_sta": idx_sta[ii],
-                    "phase_type": phase_type[ii],
-                    "dt": cc_dt[ii].squeeze().item(),
-                    "shift": cc_shift[ii].squeeze().item(),
-                    "cc": cc_max[ii].squeeze().item(),
-                    "weight": cc_weight[ii].squeeze().item(),
-                }
-            )
+        if args.mode == "TM":
+            origin_time = result["origin_time"][:, 0, 0, :]
+            phase_time = result["phase_time"][:, 0, 0, :]
+            max_cc = result["max_cc"][:, 0, 0, :]
+            for ii in range(len(idx_sta)):
+                for jj in range(len(origin_time[ii])):
+                    if max_cc[ii][jj].item() > ccconfig.min_cc:
+                        result_df.append(
+                            {
+                                "idx_mseed": idx_mseed[ii],
+                                "idx_eve": idx_eve[ii],
+                                "idx_sta": idx_sta[ii],
+                                "phase_type": phase_type[ii],
+                                "phase_time": phase_time[ii][jj].item(),
+                                "origin_time": origin_time[ii][jj].item(),
+                                "cc": max_cc[ii][jj].item(),
+                            }
+                        )
 
     if ccconfig.mode == "CC":
 
@@ -369,22 +394,22 @@ def main(args):
                 os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}_origin.csv"), index=False
             )
 
-        ##### More accurate by merging all results
-        # if world_size > 1:
-        #     dist.barrier()
+            ##### More accurate by merging all results
+            # if world_size > 1:
+            #     dist.barrier()
 
-        # if rank == 0:
-        #     result_df = []
-        #     for i in tqdm(range(world_size), desc="Merging"):
-        #         if os.path.exists(
-        #             os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}_origin.csv")
-        #         ):
-        #             result_df.append(
-        #                 pd.read_csv(
-        #                     os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}_origin.csv")
-        #                 )
-        #             )
-        #     result_df = pd.concat(result_df)
+            # if rank == 0:
+            #     result_df = []
+            #     for i in tqdm(range(world_size), desc="Merging"):
+            #         if os.path.exists(
+            #             os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}_origin.csv")
+            #         ):
+            #             result_df.append(
+            #                 pd.read_csv(
+            #                     os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}_origin.csv")
+            #                 )
+            #             )
+            #     result_df = pd.concat(result_df)
 
             ### Efficient but less accurate when event pairs split into different files
             # %% filter based on cc values
@@ -438,6 +463,41 @@ def main(args):
                 os.system(
                     f"cat {args.result_path}/CC_*_{world_size:03d}_dt.cc > {args.result_path}/CC_{world_size:03d}_dt.cc"
                 )
+
+    if ccconfig.mode == "TM":
+
+        if len(result_df) > 0:
+            result_df = pd.DataFrame(result_df)
+            result_df.to_csv(
+                os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}_origin.csv"), index=False
+            )
+
+            t0 = result_df["origin_time"].min()
+            result_df["timestamp"] = result_df["origin_time"].apply(lambda x: (x - t0).total_seconds())
+            clustering = DBSCAN(eps=2, min_samples=3).fit(result_df[["timestamp"]].values)
+            result_df["event_index"] = clustering.labels_
+            result_df["event_time"] = result_df.groupby("event_index")["timestamp"].transform("median")
+            result_df["event_time"] = result_df["event_time"].apply(lambda x: t0 + pd.Timedelta(seconds=x))
+            result_df.sort_values(by="event_time", inplace=True)
+            result_df.to_csv(
+                os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.csv"), index=False
+            )
+
+        if world_size > 1:
+            dist.barrier()
+
+        if rank == 0:
+            result_df = []
+            for i in tqdm(range(world_size), desc="Merging"):
+                if os.path.exists(os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}.csv")):
+                    result_df.append(
+                        pd.read_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}.csv"))
+                    )
+            result_df = pd.concat(result_df)
+            result_df.sort_values(by="event_time", inplace=True)
+            result_df.to_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{world_size:03d}.csv"), index=False)
+            result_df = result_df[["event_index", "event_time"]].drop_duplicates()
+            result_df.to_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{world_size:03d}_event.csv"), index=False)
 
     # MAX_THREADS = 32
     # with h5py.File(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5"), "w") as fp:

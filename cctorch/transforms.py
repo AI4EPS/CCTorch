@@ -6,10 +6,10 @@ import torch
 import torch.nn.functional as F
 import torchaudio
 from scipy import sparse
+from scipy.interpolate import CubicSpline
 from scipy.signal import tukey
 from scipy.sparse.linalg import lsmr
 from tqdm import tqdm
-from scipy.interpolate import CubicSpline
 
 
 #### Common ####
@@ -162,7 +162,7 @@ def fft_real_normalize(x):
     return fft_real(x)
 
 
-class DetectPeaks(torch.nn.Module):
+class DetectPeaksCC(torch.nn.Module):
     def __init__(self, kernel=3, stride=1, topk=2, vabs=True, interp=True, sampling_rate=100.0):
         super().__init__()
         self.kernel = kernel
@@ -224,6 +224,50 @@ class DetectPeaks(torch.nn.Module):
         meta["cc_weight"] = weight
         meta["cc_dt"] = shift_t
         meta["cc_shift"] = shift_idx
+
+        return meta
+
+
+class DetectPeaksTM(torch.nn.Module):
+    def __init__(self, vmin=0.6, kernel=300, stride=1, topk=2, vabs=True, interp=True, sampling_rate=100.0):
+        super().__init__()
+        self.vmin = vmin
+        self.kernel = kernel
+        self.stride = stride
+        self.topk = topk
+        self.vabs = vabs
+        self.interp = interp
+        self.sampling_rate = sampling_rate
+
+    def forward(self, meta):
+        xcorr = meta["xcorr"]
+        nlag = meta["nlag"]
+        nb, nc, nx, nt = xcorr.shape  # nc = 1 by reduce_c, nx = 1 based on picks
+
+        ## consider both positive and negative peaks
+        if self.vabs:
+            xcorr = torch.abs(xcorr)
+
+        smax = F.max_pool2d(xcorr, (1, self.kernel), stride=(1, self.stride), padding=(0, self.kernel // 2))
+
+        keep = (smax == xcorr).float()
+        topk_score, topk_idx = torch.topk(xcorr * keep, self.topk, sorted=True)  # nb, 1, 1, k
+        topk_score, topk_idx = topk_score.cpu().numpy(), topk_idx.cpu().numpy()
+
+        if ("begin_time" in meta["info1"]) and ("traveltime" in meta["info2"]):
+            shift_time = (topk_idx - nlag) / self.sampling_rate
+            shift_time = np.array((shift_time * 1e3).astype(int), dtype="timedelta64[ms]")
+            traveltime = [x[0].item() for x in meta["info2"]["traveltime"]]
+            traveltime = np.array((np.array(traveltime) * 1e3).astype(int), dtype="timedelta64[ms]")[
+                :, np.newaxis, np.newaxis, np.newaxis
+            ]
+            begin_time = np.array(meta["info1"]["begin_time"])[:, np.newaxis, np.newaxis, np.newaxis]
+            phase_time = begin_time + shift_time + traveltime
+            origin_time = begin_time + shift_time
+
+            meta["origin_time"] = origin_time
+            meta["phase_time"] = phase_time
+            meta["max_cc"] = topk_score
 
         return meta
 
