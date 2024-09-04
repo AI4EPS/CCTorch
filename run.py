@@ -482,12 +482,18 @@ def main(args):
                     result_df.append(
                         pd.read_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}.csv"))
                     )
+            if len(result_df) == 0:
+                return None
+
             result_df = pd.concat(result_df)
 
             result_df["origin_time"] = pd.to_datetime(result_df["origin_time"])
             t0 = result_df["origin_time"].min()
             result_df["timestamp"] = result_df["origin_time"].apply(lambda x: (x - t0).total_seconds())
-            clustering = DBSCAN(eps=2, min_samples=3).fit(result_df[["timestamp"]].values)
+            # clustering = DBSCAN(eps=2, min_samples=3).fit(result_df[["timestamp"]].values)
+            clustering = DBSCAN(eps=2, min_samples=3).fit(
+                result_df[["timestamp"]].values, sample_weight=result_df["cc"].values
+            )
             result_df["event_index"] = clustering.labels_
             result_df["event_time"] = result_df.groupby("event_index")["timestamp"].transform("median")
             result_df["event_time"] = result_df["event_time"].apply(lambda x: t0 + pd.Timedelta(seconds=x))
