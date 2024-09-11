@@ -158,6 +158,8 @@ class CCIterableDataset(IterableDataset):
             self.data_list2 = self.data_list1
 
         if self.mode == "TM":
+            self.time_before = {"P": config.time_before_p, "S": config.time_before_s}
+
             if data_list1 is not None:
                 if data_list1.endswith(".txt"):
                     with open(data_list1, "r") as fp:
@@ -333,6 +335,7 @@ class CCIterableDataset(IterableDataset):
                                 "traveltime": self.traveltime[jj],
                                 "traveltime_mask": self.traveltime_mask[jj],
                                 "traveltime_index": self.traveltime_index[jj],
+                                "time_before": self.time_before[self.data_list2.loc[jj, "phase_type"]],
                             },
                         }
                         data = torch.tensor(meta2["data"], dtype=self.dtype).to(self.device)

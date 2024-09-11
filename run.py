@@ -130,6 +130,7 @@ def main(args):
     if args.config is not None:
         with open(args.config, "r") as f:
             config = json.load(f)
+        print(json.dumps(config, indent=4))
     else:
         config = None
 
@@ -491,7 +492,7 @@ def main(args):
             t0 = result_df["origin_time"].min()
             result_df["timestamp"] = result_df["origin_time"].apply(lambda x: (x - t0).total_seconds())
             # clustering = DBSCAN(eps=2, min_samples=3).fit(result_df[["timestamp"]].values)
-            clustering = DBSCAN(eps=2, min_samples=3).fit(
+            clustering = DBSCAN(eps=0.2, min_samples=8).fit(
                 result_df[["timestamp"]].values, sample_weight=result_df["cc"].values
             )
             result_df["event_index"] = clustering.labels_

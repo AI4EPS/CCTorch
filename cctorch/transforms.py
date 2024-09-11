@@ -255,15 +255,21 @@ class DetectPeaksTM(torch.nn.Module):
         topk_score, topk_idx = topk_score.cpu().numpy(), topk_idx.cpu().numpy()
 
         if ("begin_time" in meta["info1"]) and ("traveltime" in meta["info2"]):
+            begin_time = np.array(meta["info1"]["begin_time"])
+            traveltime = [
+                x[0].item() for x in meta["info2"]["traveltime"]
+            ]  ## ENZ channels should have the same the pick
+            traveltime = (np.array(traveltime) * 1e3).astype(int).astype("timedelta64[ms]")
+            time_before = (np.array(meta["info2"]["time_before"]) * 1e3).astype(int).astype("timedelta64[ms]")
+            begin_time = begin_time[:, np.newaxis, np.newaxis, np.newaxis]  # batch, nch, nx, nt
+            traveltime = traveltime[:, np.newaxis, np.newaxis, np.newaxis]
+            time_before = time_before[:, np.newaxis, np.newaxis, np.newaxis]
+
             shift_time = (topk_idx - nlag) / self.sampling_rate
-            shift_time = np.array((shift_time * 1e3).astype(int), dtype="timedelta64[ms]")
-            traveltime = [x[0].item() for x in meta["info2"]["traveltime"]]
-            traveltime = np.array((np.array(traveltime) * 1e3).astype(int), dtype="timedelta64[ms]")[
-                :, np.newaxis, np.newaxis, np.newaxis
-            ]
-            begin_time = np.array(meta["info1"]["begin_time"])[:, np.newaxis, np.newaxis, np.newaxis]
-            phase_time = begin_time + shift_time + traveltime
-            origin_time = begin_time + shift_time
+            shift_time = (shift_time * 1e3).astype(int).astype("timedelta64[ms]")
+
+            phase_time = begin_time + shift_time + time_before
+            origin_time = phase_time - traveltime
 
             meta["origin_time"] = origin_time
             meta["phase_time"] = phase_time
