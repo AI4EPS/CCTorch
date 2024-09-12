@@ -350,8 +350,9 @@ def main(args):
         if args.mode == "CC":
             cc_max = result["cc_max"]
             cc_weight = result["cc_weight"]
-            cc_shift = result["cc_shift"]
+            cc_shift = result["cc_shift"]  ## shift of cc window
             cc_dt = result["cc_dt"]
+            tt_dt = result["tt_dt"] if "tt_dt" in result else 0.0  ## travel time difference
             for ii in range(len(idx_sta)):
                 result_df.append(
                     {
@@ -359,6 +360,7 @@ def main(args):
                         "idx_eve2": idx_eve2[ii],
                         "idx_sta": idx_sta[ii],
                         "phase_type": phase_type[ii],
+                        "tt_dt": tt_dt[ii].squeeze().item(),
                         "dt": cc_dt[ii].squeeze().item(),
                         "shift": cc_shift[ii].squeeze().item(),
                         "cc": cc_max[ii].squeeze().item(),
@@ -459,11 +461,26 @@ def main(args):
                         fp.write(f"{station_id} {record_['dt']: .4f} {record_['weight']:.4f} {phase_type}\n")
 
         if world_size > 1:
-            dist.barrier()
             if rank == 0:
-                os.system(
+                keep_header = True
+                for i in range(world_size):
+                    if not os.path.exists(
+                        os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}.csv")
+                    ):
+                        continue
+                    if keep_header:
+                        cmd = f"cat {args.result_path}/CC_{i:03d}_{world_size:03d}.csv > {args.result_path}/CC_{world_size:03d}.csv"
+                        keep_header = False
+                    else:
+                        cmd = f"tail -n +2 {args.result_path}/CC_{i:03d}_{world_size:03d}.csv >> {args.result_path}/CC_{world_size:03d}.csv"
+                    print(cmd)
+                    os.system(cmd)
+
+                cmd = (
                     f"cat {args.result_path}/CC_*_{world_size:03d}_dt.cc > {args.result_path}/CC_{world_size:03d}_dt.cc"
                 )
+                print(cmd)
+                os.system(cmd)
 
     if ccconfig.mode == "TM":
 
@@ -473,40 +490,42 @@ def main(args):
                 os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.csv"), index=False
             )
 
-        if world_size > 1:
-            dist.barrier()
+        # if world_size > 1:
+        #     dist.barrier()
 
-        if rank == 0:
-            result_df = []
-            for i in tqdm(range(world_size), desc="Merging"):
-                if os.path.exists(os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}.csv")):
-                    result_df.append(
-                        pd.read_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}.csv"))
-                    )
-            if len(result_df) == 0:
-                return None
+        # if rank == 0:
+        result_df = []
+        for i in tqdm(range(world_size), desc="Merging"):
+            if os.path.exists(os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}.csv")):
+                result_df.append(
+                    pd.read_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}.csv"))
+                )
+        if len(result_df) == 0:
+            return None
 
-            result_df = pd.concat(result_df)
+        result_df = pd.concat(result_df)
+        print(f"Number of picks: {len(result_df)}")
 
-            result_df["origin_time"] = pd.to_datetime(result_df["origin_time"])
-            t0 = result_df["origin_time"].min()
-            result_df["timestamp"] = result_df["origin_time"].apply(lambda x: (x - t0).total_seconds())
-            # clustering = DBSCAN(eps=2, min_samples=3).fit(result_df[["timestamp"]].values)
-            clustering = DBSCAN(eps=0.2, min_samples=8).fit(
-                result_df[["timestamp"]].values, sample_weight=result_df["cc"].values
-            )
-            result_df["event_index"] = clustering.labels_
-            result_df["event_time"] = result_df.groupby("event_index")["timestamp"].transform("median")
-            result_df["event_time"] = result_df["event_time"].apply(lambda x: t0 + pd.Timedelta(seconds=x))
-            result_df.sort_values(by="event_time", inplace=True)
-            result_df.to_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{world_size:03d}.csv"), index=False)
-            result_df = result_df[["event_index", "event_time", "cc"]]
-            result_df = result_df.groupby("event_index").agg(
-                {"event_time": "first", "cc": "median", "event_index": "count"}
-            )
-            result_df = result_df.rename(columns={"event_index": "num_picks"})
-            result_df.sort_values(by="event_time", inplace=True)
-            result_df.to_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{world_size:03d}_event.csv"), index=False)
+        result_df["origin_time"] = pd.to_datetime(result_df["origin_time"])
+        t0 = result_df["origin_time"].min()
+        result_df["timestamp"] = result_df["origin_time"].apply(lambda x: (x - t0).total_seconds())
+        # clustering = DBSCAN(eps=2, min_samples=3).fit(result_df[["timestamp"]].values)
+        clustering = DBSCAN(eps=0.2, min_samples=3).fit(
+            result_df[["timestamp"]].values, sample_weight=result_df["cc"].values
+        )
+        print(f"Number of events: {len(set(clustering.labels_))}")
+        result_df["event_index"] = clustering.labels_
+        result_df["event_time"] = result_df.groupby("event_index")["timestamp"].transform("median")
+        result_df["event_time"] = result_df["event_time"].apply(lambda x: t0 + pd.Timedelta(seconds=x))
+        result_df.sort_values(by="event_time", inplace=True)
+        result_df.to_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{world_size:03d}.csv"), index=False)
+        result_df = result_df[["event_index", "event_time", "cc"]]
+        result_df = result_df.groupby("event_index").agg(
+            {"event_time": "first", "cc": "median", "event_index": "count"}
+        )
+        result_df = result_df.rename(columns={"event_index": "num_picks"})
+        result_df.sort_values(by="event_time", inplace=True)
+        result_df.to_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{world_size:03d}_event.csv"), index=False)
 
     # MAX_THREADS = 32
     # with h5py.File(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5"), "w") as fp:

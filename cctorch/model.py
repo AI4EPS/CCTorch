@@ -108,12 +108,14 @@ class CCModel(nn.Module):
             xcor = F.conv1d(data1, data2, stride=1, groups=nb1 * nc1 * nx1)
 
             if self.normalize:
+                data1 = data1.view(nb1, nc1 * nx1, -1)
+                xcor = xcor.view(nb2, nc2 * nx2, -1)
                 EY2 = F.avg_pool1d(data1**2, kernel_size=nt2, stride=1)
                 EYEY = F.avg_pool1d(data1, kernel_size=nt2, stride=1) ** 2
                 std1 = torch.sqrt(torch.clamp(EY2 - EYEY, 0))
                 xcor = xcor / nt2 / (std1 + eps)
 
-            xcor = xcor.view(nb1, nc1, nx1, -1)
+            xcor = xcor.view(nb2, nc2, nx2, -1)
 
             if self.reduce_x:
                 xcor = torch.sum(xcor, dim=(-2), keepdim=True)

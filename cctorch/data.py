@@ -150,6 +150,8 @@ class CCIterableDataset(IterableDataset):
         self.num_batch = None
 
         self.pair_matrix, self.row_matrix, self.col_matrix, unique_row, unique_col = self.read_pairs(pair_list)
+        if self.mode in ["CC", "TM"]:
+            self.time_before = {"P": config.time_before_p, "S": config.time_before_s}
         if self.mode == "CC":
             self.symmetric = True
             self.data_format2 = self.data_format1
@@ -158,8 +160,6 @@ class CCIterableDataset(IterableDataset):
             self.data_list2 = self.data_list1
 
         if self.mode == "TM":
-            self.time_before = {"P": config.time_before_p, "S": config.time_before_s}
-
             if data_list1 is not None:
                 if data_list1.endswith(".txt"):
                     with open(data_list1, "r") as fp:
@@ -300,6 +300,7 @@ class CCIterableDataset(IterableDataset):
                                 "traveltime": self.traveltime[ii],
                                 "traveltime_mask": self.traveltime_mask[ii],
                                 "traveltime_index": self.traveltime_index[ii],
+                                "time_before": self.time_before[self.data_list1.loc[ii, "phase_type"]],
                             },
                         }
                         data = torch.tensor(meta1["data"], dtype=self.dtype).to(self.device)
@@ -368,6 +369,10 @@ class CCIterableDataset(IterableDataset):
 
                 num += 1
                 if num == self.batch_size:
+                    # if len(np.unique(index1)) == 1:  ## TM mode
+                    #     data_batch1 = data1[0].unsqueeze(0)
+                    #     data_batch2 = torch.stack(data2)
+                    # else:
                     data_batch1 = torch.stack(data1)
                     data_batch2 = torch.stack(data2)
                     # if (

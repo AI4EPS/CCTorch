@@ -219,11 +219,12 @@ class DetectPeaksCC(torch.nn.Module):
             delta_tt = meta["info1"]["traveltime"] - meta["info2"]["traveltime"]
             delta_tt = np.take_along_axis(delta_tt, idx, axis=1)  # nb, 1, nx
             shift_t += delta_tt
+            meta["tt_dt"] = delta_tt
 
         meta["cc_max"] = max_cc
         meta["cc_weight"] = weight
         meta["cc_dt"] = shift_t
-        meta["cc_shift"] = shift_idx
+        meta["cc_shift"] = shift_idx  ## cc window shift
 
         return meta
 
