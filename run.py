@@ -461,6 +461,7 @@ def main(args):
                         fp.write(f"{station_id} {record_['dt']: .4f} {record_['weight']:.4f} {phase_type}\n")
 
         if world_size > 1:
+            dist.barrier()
             if rank == 0:
                 keep_header = True
                 for i in range(world_size):
@@ -476,11 +477,10 @@ def main(args):
                     print(cmd)
                     os.system(cmd)
 
-                cmd = (
-                    f"cat {args.result_path}/CC_*_{world_size:03d}_dt.cc > {args.result_path}/CC_{world_size:03d}_dt.cc"
-                )
-                print(cmd)
-                os.system(cmd)
+        if rank == 0:
+            cmd = f"cat {args.result_path}/CC_*_{world_size:03d}_dt.cc > {args.result_path}/CC_{world_size:03d}_dt.cc"
+            print(cmd)
+            os.system(cmd)
 
     if ccconfig.mode == "TM":
 
