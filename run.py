@@ -460,27 +460,25 @@ def main(args):
                         phase_type = record_["phase_type"]
                         fp.write(f"{station_id} {record_['dt']: .4f} {record_['weight']:.4f} {phase_type}\n")
 
-        if world_size > 1:
-            dist.barrier()
-            if rank == 0:
-                keep_header = True
-                for i in range(world_size):
-                    if not os.path.exists(
-                        os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}.csv")
-                    ):
-                        continue
-                    if keep_header:
-                        cmd = f"cat {args.result_path}/CC_{i:03d}_{world_size:03d}.csv > {args.result_path}/CC_{world_size:03d}.csv"
-                        keep_header = False
-                    else:
-                        cmd = f"tail -n +2 {args.result_path}/CC_{i:03d}_{world_size:03d}.csv >> {args.result_path}/CC_{world_size:03d}.csv"
-                    print(cmd)
-                    os.system(cmd)
-
-        if rank == 0:
-            cmd = f"cat {args.result_path}/CC_*_{world_size:03d}_dt.cc > {args.result_path}/CC_{world_size:03d}_dt.cc"
+        # if world_size > 1:
+        # dist.barrier()
+        # if rank == 0:
+        keep_header = True
+        for i in range(world_size):
+            if not os.path.exists(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.csv")):
+                continue
+            if keep_header:
+                cmd = f"cat {args.result_path}/CC_{rank:03d}_{world_size:03d}.csv > {args.result_path}/CC_{world_size:03d}.csv"
+                keep_header = False
+            else:
+                cmd = f"tail -n +2 {args.result_path}/CC_{rank:03d}_{world_size:03d}.csv >> {args.result_path}/CC_{world_size:03d}.csv"
             print(cmd)
             os.system(cmd)
+
+        # if rank == 0:
+        cmd = f"cat {args.result_path}/CC_*_{world_size:03d}_dt.cc > {args.result_path}/CC_{world_size:03d}_dt.cc"
+        print(cmd)
+        os.system(cmd)
 
     if ccconfig.mode == "TM":
 
