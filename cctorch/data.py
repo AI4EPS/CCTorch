@@ -612,6 +612,7 @@ def read_data(file_name, data_path, format="h5", mode="CC", config={}):
     elif mode == "TM":
         if format == "mseed":
             data, info = read_mseed(file_name, config=config)
+            # data, info = read_mseed_3c(file_name, config=config)
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
@@ -623,7 +624,10 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
         stream = obspy.Stream()
         for tmp in fname.split(","):
             with fsspec.open(tmp, "rb") as fs:
-                meta = obspy.read(fs, format="MSEED")
+                if tmp.endswith(".sac"):
+                    meta = obspy.read(fs, format="SAC")
+                else:
+                    meta = obspy.read(fs, format="MSEED")
                 stream += meta
             # stream += obspy.read(tmp)
         stream = stream.merge(fill_value="latest")
@@ -702,6 +706,63 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
     #     "begin_time": begin_time.datetime,  # .strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
     #     "end_time": end_time.datetime,  # .strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
     # }
+    return data, {
+        "begin_time": np.datetime64(begin_time.datetime),
+        "end_time": np.datetime64(end_time.datetime),
+    }
+
+
+def read_mseed_3c(fname, response=None, highpass_filter=0.0, sampling_rate=100, config=None):
+    try:
+        # stream = obspy.read(fname)
+        files = fname.rstrip("\n").split(",")
+
+        traces = []
+        station_ids = []
+        for file in files:
+            # with fsspec.open(file, "rb", anon=True) as fp:
+            #     stream += obspy.read(fp)
+            stream = obspy.read(file)
+            trace = stream.merge(fill_value="latest")[0]
+            # station_ids.append(trace.id[:-1])
+            station_ids.append(trace.id.rstrip("B")[:-1])  # Hardcode for station N.WJMF.EB
+
+            ## interpolate to 100 Hz
+            if abs(trace.stats.sampling_rate - sampling_rate) > 0.1:
+                logging.warning(f"Resampling {trace.id} from {trace.stats.sampling_rate} to {sampling_rate} Hz")
+                try:
+                    trace = trace.interpolate(sampling_rate, method="linear")
+                except Exception as e:
+                    print(f"Error resampling {trace.id}:\n{e}")
+
+            trace = trace.detrend("demean")
+            if highpass_filter > 0.0:
+                trace = trace.filter("highpass", freq=highpass_filter)
+
+            traces.append(trace)
+
+        station_ids = list(set(station_ids))
+        if len(station_ids) > 1:
+            print(f"{station_ids = }")
+            raise
+        assert len(station_ids) == 1, f"Error: {fname} has multiple stations {station_ids}"
+
+        begin_time = min([st.stats.starttime for st in traces])
+        end_time = max([st.stats.endtime for st in traces])
+        [trace.trim(begin_time, end_time, pad=True, fill_value=0) for trace in traces]
+
+    except Exception as e:
+        print(f"Error reading {fname}:\n{e}")
+        return {}
+
+    nt = len(traces[0].data)
+    data = np.zeros([3, nt], dtype=np.float32)
+    for i, trace in enumerate(traces):
+        tmp = trace.data.astype("float32")
+        data[i, : len(tmp)] = tmp[:nt]
+
+    data = data[:, np.newaxis, :]  # (nc, nt) -> (nc, nx, nt)
+
     return data, {
         "begin_time": np.datetime64(begin_time.datetime),
         "end_time": np.datetime64(end_time.datetime),
