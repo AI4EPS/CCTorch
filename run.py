@@ -333,152 +333,157 @@ def main(args):
         events = pd.read_csv(args.events_csv)
         stations = pd.read_csv(args.stations_csv)
 
-    result_df = []
-    for i, data in enumerate(tqdm(dataloader, position=rank, desc=f"{rank}/{world_size}: computing")):
+        result_df = []
+        for i, data in enumerate(tqdm(dataloader, position=rank, desc=f"{rank}/{world_size}: computing")):
 
-        if args.mode == "CC":
-            idx_eve1 = data[0]["info"]["idx_eve"]
-            idx_eve2 = data[1]["info"]["idx_eve"]
-        if args.mode == "TM":
-            idx_mseed = data[0]["index"]
-            idx_eve = data[1]["info"]["idx_eve"]
-        idx_sta = data[1]["info"]["idx_sta"]
-        phase_type = data[1]["info"]["phase_type"]
+            if args.mode == "CC":
+                idx_eve1 = data[0]["info"]["idx_eve"]
+                idx_eve2 = data[1]["info"]["idx_eve"]
+            if args.mode == "TM":
+                idx_mseed = data[0]["index"]
+                idx_eve = data[1]["info"]["idx_eve"]
+            idx_sta = data[1]["info"]["idx_sta"]
+            phase_type = data[1]["info"]["phase_type"]
 
-        result = ccmodel(data)
+            result = ccmodel(data)
 
-        if args.mode == "CC":
-            cc_max = result["cc_max"]
-            cc_weight = result["cc_weight"]
-            cc_shift = result["cc_shift"]  ## shift of cc window
-            cc_dt = result["cc_dt"]
-            tt_dt = result["tt_dt"] if "tt_dt" in result else 0.0  ## travel time difference
-            for ii in range(len(idx_sta)):
-                result_df.append(
-                    {
-                        "idx_eve1": idx_eve1[ii],
-                        "idx_eve2": idx_eve2[ii],
-                        "idx_sta": idx_sta[ii],
-                        "phase_type": phase_type[ii],
-                        "tt_dt": tt_dt[ii].squeeze().item(),
-                        "dt": cc_dt[ii].squeeze().item(),
-                        "shift": cc_shift[ii].squeeze().item(),
-                        "cc": cc_max[ii].squeeze().item(),
-                        "weight": cc_weight[ii].squeeze().item(),
-                    }
+            if args.mode == "CC":
+                cc_max = result["cc_max"]
+                cc_weight = result["cc_weight"]
+                cc_shift = result["cc_shift"]  ## shift of cc window
+                cc_dt = result["cc_dt"]
+                tt_dt = result["tt_dt"] if "tt_dt" in result else 0.0  ## travel time difference
+                for ii in range(len(idx_sta)):
+                    result_df.append(
+                        {
+                            "idx_eve1": idx_eve1[ii],
+                            "idx_eve2": idx_eve2[ii],
+                            "idx_sta": idx_sta[ii],
+                            "phase_type": phase_type[ii],
+                            "tt_dt": tt_dt[ii].squeeze().item(),
+                            "dt": cc_dt[ii].squeeze().item(),
+                            "shift": cc_shift[ii].squeeze().item(),
+                            "cc": cc_max[ii].squeeze().item(),
+                            "weight": cc_weight[ii].squeeze().item(),
+                        }
+                    )
+
+            if args.mode == "TM":
+                origin_time = result["origin_time"][:, 0, 0, :]
+                phase_time = result["phase_time"][:, 0, 0, :]
+                max_cc = result["max_cc"][:, 0, 0, :]
+                for ii in range(len(idx_sta)):
+                    for jj in range(len(origin_time[ii])):
+                        if max_cc[ii][jj].item() > ccconfig.min_cc:
+                            result_df.append(
+                                {
+                                    "idx_mseed": idx_mseed[ii],
+                                    "idx_eve": idx_eve[ii],
+                                    "idx_sta": idx_sta[ii],
+                                    "phase_type": phase_type[ii],
+                                    "phase_time": phase_time[ii][jj].item(),
+                                    "origin_time": origin_time[ii][jj].item(),
+                                    "cc": max_cc[ii][jj].item(),
+                                }
+                            )
+
+        if ccconfig.mode == "CC":
+
+            # %%
+            if len(result_df) > 0:
+
+                result_df = pd.DataFrame(result_df)
+                result_df.to_csv(
+                    os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}_origin.csv"),
+                    index=False,
                 )
 
-        if args.mode == "TM":
-            origin_time = result["origin_time"][:, 0, 0, :]
-            phase_time = result["phase_time"][:, 0, 0, :]
-            max_cc = result["max_cc"][:, 0, 0, :]
-            for ii in range(len(idx_sta)):
-                for jj in range(len(origin_time[ii])):
-                    if max_cc[ii][jj].item() > ccconfig.min_cc:
-                        result_df.append(
-                            {
-                                "idx_mseed": idx_mseed[ii],
-                                "idx_eve": idx_eve[ii],
-                                "idx_sta": idx_sta[ii],
-                                "phase_type": phase_type[ii],
-                                "phase_time": phase_time[ii][jj].item(),
-                                "origin_time": origin_time[ii][jj].item(),
-                                "cc": max_cc[ii][jj].item(),
-                            }
-                        )
+                ##### More accurate by merging all results
+                # if world_size > 1:
+                #     dist.barrier()
 
-    if ccconfig.mode == "CC":
+                # if rank == 0:
+                #     result_df = []
+                #     for i in tqdm(range(world_size), desc="Merging"):
+                #         if os.path.exists(
+                #             os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}_origin.csv")
+                #         ):
+                #             result_df.append(
+                #                 pd.read_csv(
+                #                     os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}_origin.csv")
+                #                 )
+                #             )
+                #     result_df = pd.concat(result_df)
 
-        # %%
-        if len(result_df) > 0:
+                ### Efficient but less accurate when event pairs split into different files
+                # %% filter based on cc values
+                result_df = result_df[
+                    (result_df["cc"] >= ccconfig.min_cc)
+                    & (result_df["shift"].abs() <= result_df["phase_type"].map(ccconfig.max_shift))
+                ]
 
-            result_df = pd.DataFrame(result_df)
-            result_df.to_csv(
-                os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}_origin.csv"), index=False
-            )
+                # %% merge different instrument types of the same stations
+                stations["network_station"] = stations["network"] + "." + stations["station"]
+                result_df = result_df.merge(stations[["network_station", "idx_sta"]], on="idx_sta", how="left")
+                result_df.sort_values("weight", ascending=False, inplace=True)
+                result_df = (
+                    result_df.groupby(["idx_eve1", "idx_eve2", "network_station", "phase_type"]).first().reset_index()
+                )
+                result_df.drop(columns=["network_station"], inplace=True)
 
-            ##### More accurate by merging all results
-            # if world_size > 1:
-            #     dist.barrier()
+                # %% filter based on cc observations
+                result_df = (
+                    result_df.groupby(["idx_eve1", "idx_eve2"])
+                    .apply(lambda x: (x.nlargest(ccconfig.max_obs, "weight") if len(x) >= ccconfig.min_obs else None))
+                    .reset_index(drop=True)
+                )
 
-            # if rank == 0:
-            #     result_df = []
-            #     for i in tqdm(range(world_size), desc="Merging"):
-            #         if os.path.exists(
-            #             os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}_origin.csv")
-            #         ):
-            #             result_df.append(
-            #                 pd.read_csv(
-            #                     os.path.join(args.result_path, f"{ccconfig.mode}_{i:03d}_{world_size:03d}_origin.csv")
-            #                 )
-            #             )
-            #     result_df = pd.concat(result_df)
+                # %%
+                event_idx_dict = events["event_index"].to_dict()  ##  faster than using .loc
+                station_id_dict = stations["station"].to_dict()
 
-            ### Efficient but less accurate when event pairs split into different files
-            # %% filter based on cc values
-            result_df = result_df[
-                (result_df["cc"] >= ccconfig.min_cc)
-                & (result_df["shift"].abs() <= result_df["phase_type"].map(ccconfig.max_shift))
-            ]
+                # %%
+                result_df.to_csv(
+                    os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.csv"), index=False
+                )
 
-            # %% merge different instrument types of the same stations
-            stations["network_station"] = stations["network"] + "." + stations["station"]
-            result_df = result_df.merge(stations[["network_station", "idx_sta"]], on="idx_sta", how="left")
-            result_df.sort_values("weight", ascending=False, inplace=True)
-            result_df = (
-                result_df.groupby(["idx_eve1", "idx_eve2", "network_station", "phase_type"]).first().reset_index()
-            )
-            result_df.drop(columns=["network_station"], inplace=True)
+                # %% write to cc file
+                with open(
+                    os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}_dt.cc"), "w"
+                ) as fp:
+                    for (i, j), record in tqdm(
+                        result_df.groupby(["idx_eve1", "idx_eve2"]), desc=f"{rank}/{world_size} writing"
+                    ):
+                        event_idx1 = event_idx_dict[i]
+                        event_idx2 = event_idx_dict[j]
+                        fp.write(f"# {event_idx1} {event_idx2} 0.000\n")
+                        for k, record_ in record.iterrows():
+                            idx_sta = record_["idx_sta"]
+                            station_id = station_id_dict[idx_sta]
+                            phase_type = record_["phase_type"]
+                            fp.write(f"{station_id} {record_['dt']: .4f} {record_['weight']:.4f} {phase_type}\n")
 
-            # %% filter based on cc observations
-            result_df = (
-                result_df.groupby(["idx_eve1", "idx_eve2"])
-                .apply(lambda x: (x.nlargest(ccconfig.max_obs, "weight") if len(x) >= ccconfig.min_obs else None))
-                .reset_index(drop=True)
-            )
-
-            # %%
-            event_idx_dict = events["event_index"].to_dict()  ##  faster than using .loc
-            station_id_dict = stations["station"].to_dict()
-
-            # %%
-            result_df.to_csv(
-                os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.csv"), index=False
-            )
-
-            # %% write to cc file
-            with open(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}_dt.cc"), "w") as fp:
-                for (i, j), record in tqdm(
-                    result_df.groupby(["idx_eve1", "idx_eve2"]), desc=f"{rank}/{world_size} writing"
-                ):
-                    event_idx1 = event_idx_dict[i]
-                    event_idx2 = event_idx_dict[j]
-                    fp.write(f"# {event_idx1} {event_idx2} 0.000\n")
-                    for k, record_ in record.iterrows():
-                        idx_sta = record_["idx_sta"]
-                        station_id = station_id_dict[idx_sta]
-                        phase_type = record_["phase_type"]
-                        fp.write(f"{station_id} {record_['dt']: .4f} {record_['weight']:.4f} {phase_type}\n")
-
+        # Leave merging to the postprocess script
         # if world_size > 1:
-        # dist.barrier()
-        # if rank == 0:
-        keep_header = True
-        for i in range(world_size):
-            if not os.path.exists(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.csv")):
-                continue
-            if keep_header:
-                cmd = f"cat {args.result_path}/CC_{rank:03d}_{world_size:03d}.csv > {args.result_path}/CC_{world_size:03d}.csv"
-                keep_header = False
-            else:
-                cmd = f"tail -n +2 {args.result_path}/CC_{rank:03d}_{world_size:03d}.csv >> {args.result_path}/CC_{world_size:03d}.csv"
-            print(cmd)
-            os.system(cmd)
+        #     dist.barrier()
 
         # if rank == 0:
-        cmd = f"cat {args.result_path}/CC_*_{world_size:03d}_dt.cc > {args.result_path}/CC_{world_size:03d}_dt.cc"
-        print(cmd)
-        os.system(cmd)
+        #     for rank in range(world_size):
+        #         if not os.path.exists(
+        #             os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.csv")
+        #         ):
+        #             continue
+        #         if rank == 0:
+        #             cmd = f"cat {args.result_path}/CC_{rank:03d}_{world_size:03d}.csv > {args.result_path}/CC_{world_size:03d}.csv"
+        #         else:
+        #             cmd = f"tail -n +2 {args.result_path}/CC_{rank:03d}_{world_size:03d}.csv >> {args.result_path}/CC_{world_size:03d}.csv"
+        #         print(cmd)
+        #         os.system(cmd)
+
+        # if rank == 0:
+        #     cmd = f"cat {args.result_path}/CC_*_{world_size:03d}_dt.cc > {args.result_path}/CC_{world_size:03d}_dt.cc"
+        #     print(cmd)
+        #     os.system(cmd)
 
     if ccconfig.mode == "TM":
 
