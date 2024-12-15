@@ -18,10 +18,8 @@ class CCModel(nn.Module):
     ):
         super(CCModel, self).__init__()
         self.dt = config.dt
-        self.nlag = config.nlag
         self.nma = config.nma
         self.channel_shift = config.channel_shift
-
         self.reduce_t = config.reduce_t  # time reduction
         self.reduce_x = config.reduce_x  # station reduction
         self.reduce_c = config.reduce_c  # channel reduction
@@ -29,7 +27,7 @@ class CCModel(nn.Module):
         self.mccc = config.mccc
         self.use_pair_index = config.use_pair_index
         self.pre_fft = config.pre_fft
-        self.spectral_whitening = config.spectral_whitening
+
         self.transforms = transforms
         self.batch_size = batch_size
         self.to_device = to_device
@@ -38,6 +36,12 @@ class CCModel(nn.Module):
         # TM
         self.shift_t = config.shift_t
         self.normalize = config.normalize
+
+        # AN
+        self.nlag = config.nlag
+        self.nfft = self.nlag * 2
+        self.window = torch.hann_window(self.nfft, periodic=False).to(self.device)
+        self.spectral_whitening = config.spectral_whitening
 
     def forward(self, x):
         """Perform cross-correlation on input data
@@ -123,14 +127,29 @@ class CCModel(nn.Module):
                 xcor = torch.mean(xcor, dim=(-3), keepdim=True)
 
         elif self.domain == "stft":
+            nlag = self.nlag
             nb1, nc1, nx1, nt1 = data1.shape
             # nb2, nc2, nx2, nt2 = data2.shape
             data1 = data1.view(nb1 * nc1 * nx1, nt1)
             # data2 = data2.view(nb2 * nc2 * nx2, nt2)
             data2 = data2.view(nb1 * nc1 * nx1, nt1)
             if not self.pre_fft:
-                data1 = torch.stft(data1, n_fft=self.nlag * 2, hop_length=self.nlag, center=True, return_complex=True)
-                data2 = torch.stft(data2, n_fft=self.nlag * 2, hop_length=self.nlag, center=True, return_complex=True)
+                data1 = torch.stft(
+                    data1,
+                    n_fft=self.nlag * 2,
+                    hop_length=self.nlag,
+                    window=self.window,
+                    center=True,
+                    return_complex=True,
+                )
+                data2 = torch.stft(
+                    data2,
+                    n_fft=self.nlag * 2,
+                    hop_length=self.nlag,
+                    window=self.window,
+                    center=True,
+                    return_complex=True,
+                )
             if self.spectral_whitening:
                 # freqs = np.fft.fftfreq(self.nlag*2, d=self.dt)
                 # data1 = data1 / torch.clip(torch.abs(data1), min=1e-7) #float32 eps

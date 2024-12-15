@@ -105,6 +105,12 @@ class TemporalMovingNormalization(torch.nn.Module):
         self.window_size = window_size
 
     def forward(self, data):
+        if len(data.shape) == 2:
+            data = data.unsqueeze(0).unsqueeze(0)
+        elif len(data.shape) == 3:
+            data = data.unsqueeze(0)
+        else:
+            pass
         nb, nc, nx, nt = data.shape
         moving_mean = F.avg_pool2d(
             data,

@@ -11,13 +11,14 @@ import pandas as pd
 import torch
 import torch.distributed as dist
 import torchvision.transforms as T
-import utils
-from cctorch import CCDataset, CCIterableDataset, CCModel
-from cctorch.transforms import *
-from cctorch.utils import write_cc_pairs, write_tm_detects
 from sklearn.cluster import DBSCAN
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+
+import utils
+from cctorch import CCDataset, CCIterableDataset, CCModel
+from cctorch.transforms import *
+from cctorch.utils import write_ambient_noise
 
 
 def get_args_parser(add_help=True):
@@ -56,7 +57,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--batch_size", default=1024, type=int, help="batch size")
     parser.add_argument("--buffer_size", default=10, type=int, help="buffer size for writing to h5 file")
     parser.add_argument("--workers", default=4, type=int, help="data loading workers")
-    parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu, Default: cuda)")
+    parser.add_argument("--device", default="cpu", type=str, help="device (Use cpu/cuda/mps, Default: cpu)")
     parser.add_argument(
         "--dtype", default="float32", type=str, help="data type (Use float32 or float64, Default: float32)"
     )
@@ -233,7 +234,7 @@ def main(args):
         ## TODO add preprocess for ambient noise
         if args.temporal_gradient:  ## convert to strain rate
             preprocess.append(TemporalGradient(ccconfig.fs))
-        preprocess.append(TemporalMovingNormalization(int(30 * ccconfig.fs)))  # 30s for 25Hz
+        preprocess.append(TemporalMovingNormalization(int(ccconfig.maxlag * ccconfig.fs)))  # 30s for 25Hz
         preprocess.append(
             Filtering(
                 ccconfig.fmin,
@@ -244,7 +245,7 @@ def main(args):
                 ccconfig.dtype,
                 ccconfig.transform_device,
             )
-        )  # 50Hz
+        )  # 50Hz # not working on M1
         preprocess.append(Decimation(ccconfig.decimate_factor))  # 25Hz
         preprocess.append(T.Lambda(remove_spatial_median))
         preprocess.append(TemporalMovingNormalization(int(2 * ccconfig.fs // ccconfig.decimate_factor)))  # 2s for 25Hz
@@ -327,7 +328,7 @@ def main(args):
     )
     ccmodel.to(args.device)
 
-    if args.mode == "CC":
+    if args.mode in ["CC", "TM"]:
         picks = pd.read_csv(args.picks_csv)
         picks.set_index("idx_pick", inplace=True)
         events = pd.read_csv(args.events_csv)
@@ -550,24 +551,19 @@ def main(args):
         picks_df.to_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{world_size:03d}_pick.csv"), index=False)
         events_df.to_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{world_size:03d}_event.csv"), index=False)
 
-    # MAX_THREADS = 32
-    # with h5py.File(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5"), "w") as fp:
-    #     with ThreadPoolExecutor(max_workers=16) as executor:
-    #         futures = set()
-    #         lock = threading.Lock()
-    #         for data in tqdm(dataloader, position=rank, desc=f"{args.mode}: {rank}/{world_size}"):
-    #             result = ccmodel(data)
-    #             if args.mode == "CC":
-    #                 thread = executor.submit(write_cc_pairs, [result], fp, ccconfig, lock)
-    #                 futures.add(thread)
-    #                 # write_cc_pairs([result], fp, ccconfig, lock)
-    #             if args.mode == "TM":
-    #                 thread = executor.submit(write_tm_detects, [result], fp, ccconfig, lock)
-    #                 futures.add(thread)
-    #                 # write_tm_detects([result], fp, ccconfig, lock)
-    #             if len(futures) >= MAX_THREADS:
-    #                 done, futures = wait(futures, return_when=FIRST_COMPLETED)
-    #         executor.shutdown(wait=True)
+    if args.mode == "AN":
+        MAX_THREADS = 32
+        with h5py.File(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5"), "w") as fp:
+            with ThreadPoolExecutor(max_workers=16) as executor:
+                futures = set()
+                lock = threading.Lock()
+                for data in tqdm(dataloader, position=rank, desc=f"{args.mode}: {rank}/{world_size}"):
+                    result = ccmodel(data)
+                    thread = executor.submit(write_ambient_noise, [result], fp, ccconfig, lock)
+                    futures.add(thread)
+                    if len(futures) >= MAX_THREADS:
+                        done, futures = wait(futures, return_when=FIRST_COMPLETED)
+                executor.shutdown(wait=True)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ from tqdm.auto import tqdm
 def get_args_parser(add_help=True):
 
     import argparse
+
     parser = argparse.ArgumentParser(description="Read CCTorch Results", add_help=add_help)
     parser.add_argument("--result_path", type=str, default="results", help="path to results")
     parser.add_argument("--figure_path", type=str, default="figures", help="path to figures")
@@ -23,23 +24,22 @@ def get_args_parser(add_help=True):
     )
     return parser
 
+
 # %%
 if __name__ == "__main__":
 
     args = get_args_parser().parse_args()
-    
+
     result_path = Path(args.result_path)
     figure_path = Path(args.figure_path)
     if not figure_path.exists():
         figure_path.mkdir(parents=True)
 
-    channels = args.fixed_channels
-
     h5_files = sorted(result_path.glob("*.h5"))
     print(f"{len(h5_files)} hdf5 files found")
 
     tmp = []
-    for ch1 in channels:
+    for ch1 in args.fixed_channels:
         data = []
         index = []
         for h5_file in h5_files:
@@ -61,4 +61,3 @@ if __name__ == "__main__":
         plt.imshow(data, vmin=-vmax, vmax=vmax, aspect="auto", cmap="RdBu")
         plt.colorbar()
         plt.savefig(figure_path / f"result_{ch1}.png", dpi=300, bbox_inches="tight")
-

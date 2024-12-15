@@ -264,43 +264,27 @@ def write_cc_pairs(results, fp, ccconfig, lock=nullcontext(), plot_figure=False)
     #                         plt.close(fig)
 
 
-def write_ambient_noise(results, result_path, ccconfig, rank=0, world_size=1):
-    if not isinstance(result_path, Path):
-        result_path = Path(result_path)
+def write_ambient_noise(results, fp, ccconfig, lock=nullcontext(), plot_figure=False):
+    """
+    Write ambient noise results to disk.
+    """
+    for meta in results:
+        xcorr = meta["xcorr"].cpu().numpy()
+        nb, nch, nx, nt = xcorr.shape
+        for i in range(nb):
+            data = np.squeeze(np.nan_to_num(xcorr[i, :, :, :]))
+            id1, id2 = meta["pair_index"][i]
 
-    with h5py.File(result_path / f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5", "a") as fp:
-        for meta in results:
-            xcorr = meta["xcorr"].cpu().numpy()
-            nb, nch, nx, nt = xcorr.shape
-            for i in range(nb):
-                data = np.squeeze(np.nan_to_num(xcorr[i, :, :, :]))
-
-                # for j, pair_id in enumerate(meta["pair_index"]):
-                for pair_id in meta["pair_index"]:
-                    list1, list2 = pair_id
-
-                    for j, (id1, id2) in enumerate(zip(list1, list2)):
-                        if f"{id1}/{id2}" not in fp:
-                            gp = fp.create_group(f"{id1}/{id2}")
-                            ds = gp.create_dataset("xcorr", data=data[..., j, :])
-                            ds.attrs["count"] = 1
-                        else:
-                            gp = fp[f"{id1}/{id2}"]
-                            ds = gp["xcorr"]
-                            count = ds.attrs["count"]
-                            ds[:] = count / (count + 1) * ds[:] + data[..., j, :] / (count + 1)
-                            ds.attrs["count"] = count + 1
-
-                        if f"{id2}/{id1}" not in fp:
-                            gp = fp.create_group(f"{id2}/{id1}")
-                            ds = gp.create_dataset("xcorr", data=np.flip(data[..., j, :], axis=-1))
-                            ds.attrs["count"] = 1
-                        else:
-                            gp = fp[f"{id2}/{id1}"]
-                            ds = gp["xcorr"]
-                            count = ds.attrs["count"]
-                            ds[:] = count / (count + 1) * ds[:] + np.flip(data[..., j, :], axis=-1) / (count + 1)
-                            ds.attrs["count"] = count + 1
+            if f"{id1}/{id2}" not in fp:
+                gp = fp.create_group(f"{id1}/{id2}")
+                ds = gp.create_dataset("xcorr", data=data)
+                ds.attrs["count"] = 1
+            else:
+                gp = fp[f"{id1}/{id2}"]
+                ds = gp["xcorr"]
+                count = ds.attrs["count"]
+                ds[:] = count / (count + 1) * ds[:] + data / (count + 1)
+                ds.attrs["count"] = count + 1
 
 
 def write_xcor_data_to_h5(result, path_result, phase1="P", phase2="P"):
