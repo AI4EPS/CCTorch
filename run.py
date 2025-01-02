@@ -11,14 +11,13 @@ import pandas as pd
 import torch
 import torch.distributed as dist
 import torchvision.transforms as T
-from sklearn.cluster import DBSCAN
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-
 import utils
 from cctorch import CCDataset, CCIterableDataset, CCModel
 from cctorch.transforms import *
 from cctorch.utils import write_ambient_noise
+from sklearn.cluster import DBSCAN
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 
 def get_args_parser(add_help=True):
@@ -56,8 +55,9 @@ def get_args_parser(add_help=True):
     parser.add_argument("--maxlag", default=0.5, type=float, help="maximum time lag during cross-correlation")
     parser.add_argument("--batch_size", default=1024, type=int, help="batch size")
     parser.add_argument("--buffer_size", default=10, type=int, help="buffer size for writing to h5 file")
-    parser.add_argument("--workers", default=4, type=int, help="data loading workers")
+    parser.add_argument("--workers", default=16, type=int, help="data loading workers")
     parser.add_argument("--device", default="cpu", type=str, help="device (Use cpu/cuda/mps, Default: cpu)")
+    parser.add_argument("--dataset_cpu", action="store_true", help="Load data to cpu")
     parser.add_argument(
         "--dtype", default="float32", type=str, help="data type (Use float32 or float64, Default: float32)"
     )
@@ -294,7 +294,7 @@ def main(args):
             data_path2=args.data_path2,
             data_format1=args.data_format1,
             data_format2=args.data_format2,
-            device=args.device,
+            device="cpu" if args.dataset_cpu else args.device,
             transforms=preprocess,
             batch_size=args.batch_size,
             rank=rank,
@@ -313,7 +313,8 @@ def main(args):
     dataloader = DataLoader(
         dataset,
         batch_size=None,
-        num_workers=args.workers if args.dataset_type == "map" else 0,
+        # num_workers=args.workers if args.dataset_type == "map" else 0,
+        num_workers=args.workers if args.dataset_cpu else 0,
         sampler=sampler if args.dataset_type == "map" else None,
         pin_memory=False,
         collate_fn=lambda x: x,
@@ -322,7 +323,8 @@ def main(args):
     ccmodel = CCModel(
         config=ccconfig,
         batch_size=args.batch_size,  ## only useful for dataset_type == map
-        to_device=False,  ## to_device is done in dataset in default
+        # to_device=False,  ## to_device is done in dataset in default
+        to_device=args.dataset_cpu,
         device=args.device,
         transforms=postprocess,
     )

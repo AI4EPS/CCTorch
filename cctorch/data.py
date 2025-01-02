@@ -165,7 +165,9 @@ class CCIterableDataset(IterableDataset):
                     with open(data_list1, "r") as fp:
                         self.data_list1 = fp.read().splitlines()
                 else:
-                    self.data_list1 = pd.read_csv(data_list1).set_index("idx_pick")
+                    self.data_list1 = pd.read_csv(data_list1)
+                    if "idx_pick" in self.data_list1.columns:
+                        self.data_list1 = self.data_list1.set_index("idx_pick")
             else:
                 self.data_list1 = None
             if data_list2 is not None:
@@ -173,7 +175,9 @@ class CCIterableDataset(IterableDataset):
                     with open(data_list2, "r") as fp:
                         self.data_list2 = fp.read().splitlines()
                 else:
-                    self.data_list2 = pd.read_csv(data_list2).set_index("idx_pick")
+                    self.data_list2 = pd.read_csv(data_list2)
+                    if "idx_pick" in self.data_list2.columns:
+                        self.data_list2 = self.data_list2.set_index("idx_pick")
             else:
                 self.data_list2 = None
 
@@ -317,16 +321,16 @@ class CCIterableDataset(IterableDataset):
                             mode=self.mode,
                             config=self.config,
                         )
+                        info.update({"file_name": self.data_list1.loc[ii, "file_name"]})
+                        if "channel_index" in self.data_list1.columns:  # AN
+                            info.update({"channel_index": self.data_list1.loc[ii, "channel_index"]})
                         data = torch.tensor(data, dtype=self.dtype).to(self.device)
                         if self.transforms is not None:
                             data = self.transforms(data)
                         meta1 = {
                             "data": data,
                             "index": ii,
-                            "info": {
-                                "file_name": self.data_list1.loc[ii, "file_name"],
-                                "channel_index": self.data_list1.loc[ii, "channel_index"],
-                            },
+                            "info": info,
                         }
                         local_dict[self.data_list1.loc[ii, "file_name"]] = meta1
                     else:
@@ -363,16 +367,16 @@ class CCIterableDataset(IterableDataset):
                             mode=self.mode,
                             config=self.config,
                         )
+                        info.update({"file_name": self.data_list2.loc[jj, "file_name"]})
+                        if "channel_index" in self.data_list2.columns:  # AN
+                            info.update({"channel_index": self.data_list2.loc[jj, "channel_index"]})
                         data = torch.tensor(data, dtype=self.dtype).to(self.device)
                         if self.transforms is not None:
                             data = self.transforms(data)
                         meta2 = {
                             "data": data,
                             "index": jj,
-                            "info": {
-                                "file_name": self.data_list2.loc[jj, "file_name"],
-                                "channel_index": self.data_list2.loc[jj, "channel_index"],
-                            },
+                            "info": info,
                         }
                         local_dict[self.data_list2.loc[jj, "file_name"]] = meta2
                     else:
@@ -496,7 +500,7 @@ def read_data(file_name, data_path, format="h5", mode="CC", config={}):
 def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
     try:
         stream = obspy.Stream()
-        for tmp in fname.split(","):
+        for tmp in fname.split("_"):
             with fsspec.open(tmp, "rb") as fs:
                 if tmp.endswith(".sac"):
                     meta = obspy.read(fs, format="SAC")
