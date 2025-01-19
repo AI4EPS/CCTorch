@@ -11,13 +11,14 @@ import pandas as pd
 import torch
 import torch.distributed as dist
 import torchvision.transforms as T
+from sklearn.cluster import DBSCAN
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
 import utils
 from cctorch import CCDataset, CCIterableDataset, CCModel
 from cctorch.transforms import *
 from cctorch.utils import write_ambient_noise
-from sklearn.cluster import DBSCAN
-from torch.utils.data import DataLoader
-from tqdm import tqdm
 
 
 def get_args_parser(add_help=True):
@@ -35,8 +36,8 @@ def get_args_parser(add_help=True):
     parser.add_argument("--data_list2", default=None, type=str, help="data list 1")
     parser.add_argument("--data_path1", default="./", type=str, help="data path")
     parser.add_argument("--data_path2", default="./", type=str, help="data path")
-    parser.add_argument("--data_format1", default="h5", type=str, help="data type in {h5, memmap}")
-    parser.add_argument("--data_format2", default="h5", type=str, help="data type in {h5, memmap}")
+    parser.add_argument("--data_format1", default="h5", type=str, help="data type in {h5, memmap, mseed}")
+    parser.add_argument("--data_format2", default="h5", type=str, help="data type in {h5, memmap, mseed}")
     parser.add_argument("--config", default=None, type=str, help="config file")
     parser.add_argument("--result_path", default="./results", type=str, help="results path")
     parser.add_argument("--dataset_type", default="iterable", type=str, help="data loader type in {map, iterable}")

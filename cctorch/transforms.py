@@ -142,6 +142,8 @@ class TemporalMovingNormalization(torch.nn.Module):
         moving_abs[moving_abs == 0.0] = 1.0
         data /= moving_abs[:, :, :nx, :nt]
 
+        data = data.squeeze(0)  # (nb, nc, nx, nt) -> (nc, nx, nt)
+
         return data
 
 

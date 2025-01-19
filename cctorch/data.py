@@ -184,6 +184,7 @@ class CCIterableDataset(IterableDataset):
         if self.mode == "AN":
             self.data_list1 = pd.read_csv(data_list1)
             self.data_list2 = self.data_list1
+            self.data_format2 = self.data_format1
 
         block_num1 = int(np.ceil(len(unique_row) / block_size1))
         block_num2 = int(np.ceil(len(unique_col) / block_size2))
@@ -382,12 +383,14 @@ class CCIterableDataset(IterableDataset):
                     else:
                         meta2 = local_dict[self.data_list2.loc[jj, "file_name"]]
 
-                if self.mode == "AN":
-                    data1.append(meta1["data"][:, :, self.data_list1.loc[ii, "channel_index"]])
-                    index1.append(self.data_list1.loc[ii, "channel_index"])
+                if (self.mode == "AN") and ("channel_index" in self.data_list1.columns):
+                    ch1 = self.data_list1.loc[ii, "channel_index"]
+                    ch2 = self.data_list2.loc[jj, "channel_index"]
+                    data1.append(meta1["data"][:, ch1 : ch1 + 1, :])  # (nc, nx, nt)
+                    index1.append(ch1)
                     info1.append({"file_name": self.data_list1.loc[ii, "file_name"]})
-                    data2.append(meta2["data"][:, :, self.data_list2.loc[jj, "channel_index"]])
-                    index2.append(self.data_list2.loc[jj, "channel_index"])
+                    data2.append(meta2["data"][:, ch2 : ch2 + 1, :])
+                    index2.append(ch2)
                     info2.append({"file_name": self.data_list2.loc[jj, "file_name"]})
                 else:
                     data1.append(meta1["data"])
@@ -485,6 +488,8 @@ def read_data(file_name, data_path, format="h5", mode="CC", config={}):
     elif mode == "AN":
         if format == "h5":
             data, info = read_das_continuous_data_h5(data_path / file_name, dataset_keys=[])
+        elif format == "mseed":
+            data, info = read_mseed(file_name, config=config)
 
     elif mode == "TM":
         if format == "mseed":
@@ -500,8 +505,8 @@ def read_data(file_name, data_path, format="h5", mode="CC", config={}):
 def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
     try:
         stream = obspy.Stream()
-        for tmp in fname.split("_"):
-            with fsspec.open(tmp, "rb") as fs:
+        for tmp in fname.split("|"):
+            with fsspec.open(tmp, "rb", anon=True) as fs:
                 if tmp.endswith(".sac"):
                     meta = obspy.read(fs, format="SAC")
                 else:
