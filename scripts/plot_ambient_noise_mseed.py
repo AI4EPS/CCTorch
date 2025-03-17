@@ -50,4 +50,4 @@ if __name__ == "__main__":
                 #     data.append(fp[ch1][ch2]["xcorr"][:])
                 #     index.append(ch2)
 
-            raise
+            # raise
