@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import torchaudio
 from scipy import sparse
 from scipy.interpolate import CubicSpline
-from scipy.signal import tukey
+from scipy.signal.windows import tukey
 from scipy.sparse.linalg import lsmr
 from tqdm import tqdm
 

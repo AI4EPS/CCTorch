@@ -247,7 +247,7 @@ def main(args):
                 ccconfig.transform_device,
             )
         )  # 50Hz # not working on M1
-        preprocess.append(Decimation(ccconfig.decimate_factor))  # 25Hz
+        # preprocess.append(Decimation(ccconfig.decimate_factor))  # 25Hz
         preprocess.append(T.Lambda(remove_spatial_median))
         preprocess.append(TemporalMovingNormalization(int(2 * ccconfig.fs // ccconfig.decimate_factor)))  # 2s for 25Hz
 
