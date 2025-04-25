@@ -16,6 +16,8 @@ import torchaudio
 from scipy.sparse import coo_matrix
 from torch.utils.data import Dataset, IterableDataset
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
 
 class CCDataset(Dataset):
@@ -125,6 +127,7 @@ class CCIterableDataset(IterableDataset):
         data_format2="h5",
         block_size1=1,
         block_size2=1,
+        cache=False,
         dtype=torch.float32,
         device="cpu",
         transforms=None,
@@ -145,6 +148,7 @@ class CCIterableDataset(IterableDataset):
         self.data_format2 = data_format2
         self.transforms = transforms
         self.batch_size = batch_size
+        self.cache = cache
         self.device = device
         self.dtype = dtype
         self.num_batch = None
@@ -185,6 +189,11 @@ class CCIterableDataset(IterableDataset):
             self.data_list1 = pd.read_csv(data_list1)
             self.data_list2 = self.data_list1
             self.data_format2 = self.data_format1
+            self.cache = True
+
+        assert (
+            block_size1 >= batch_size or block_size2 >= batch_size or block_size1 * block_size2 >= batch_size
+        ), f"block_size1 = {block_size1}, block_size2 = {block_size2}, and block_size1 * block_size2 = {block_size1 * block_size2} < batch_size = {batch_size}"
 
         block_num1 = int(np.ceil(len(unique_row) / block_size1))
         block_num2 = int(np.ceil(len(unique_col) / block_size2))
@@ -279,12 +288,54 @@ class CCIterableDataset(IterableDataset):
 
         return iter(self.sample(self.block_index[worker_id::num_workers]))
 
+    def cache_data(self, local_dict, ii):
+        if self.data_list1.loc[ii, "file_name"] not in local_dict:
+            data, info = read_data(
+                self.data_list1.loc[ii, "file_name"],
+                self.data_path1,
+                self.data_format1,
+                mode=self.mode,
+                config=self.config,
+            )
+            info.update({"file_name": self.data_list1.loc[ii, "file_name"]})
+            if "channel_index" in self.data_list1.columns:  # AN
+                info.update({"channel_index": self.data_list1.loc[ii, "channel_index"]})
+            data = torch.tensor(data, dtype=self.dtype).to(self.device)
+            if self.transforms is not None:
+                data = self.transforms(data)
+            meta1 = {
+                "data": data,
+                "index": ii,
+                "info": info,
+            }
+            local_dict[self.data_list1.loc[ii, "file_name"]] = meta1
+
     def sample(self, block_index):
+
+        executor = ThreadPoolExecutor(max_workers=16)
+
         for i, j in block_index:
             local_dict = {}
             row_index, col_index = self.group1[i], self.group2[j]
             row_matrix = self.row_matrix[row_index, :][:, col_index].tocoo()
             col_matrix = self.col_matrix[row_index, :][:, col_index].tocoo()
+
+            if self.cache and self.data_format1 != "memmap" and self.data_format2 != "memmap":
+                idx = []
+                for ii, jj in zip(row_matrix.data, col_matrix.data):
+                    if ii not in idx:
+                        idx.append(ii)
+                    if jj not in idx:
+                        idx.append(jj)
+                futures = [executor.submit(self.cache_data, local_dict, ii) for ii in idx]
+                time.sleep(5)
+                # with ThreadPoolExecutor(max_workers=16) as executor:
+                #     futures = [
+                #         executor.submit(self.cache_data, local_dict, ii)
+                #         for ii in set(row_matrix.data) | set(col_matrix.data)
+                #     ]
+                #     for future in tqdm(as_completed(futures), total=len(futures), desc="Caching data"):
+                #         future.result()
 
             data1, index1, info1, data2, index2, info2 = [], [], [], [], [], []
             num = 0
@@ -515,6 +566,19 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
             # stream += obspy.read(tmp)
         stream = stream.merge(fill_value="latest")
 
+        ## FIXME: HARDCODE for California
+        if tmp.startswith("s3://ncedc-pds"):
+            year, jday = tmp.split("/")[-1].split(".")[-2:]
+            year, jday = int(year), int(jday)
+            begin_time = obspy.UTCDateTime(year=year, julday=jday)
+            end_time = begin_time + 86400  ## 1 day
+            stream = stream.trim(begin_time, end_time, pad=True, fill_value=0, nearest_sample=True)
+        elif tmp.startswith("s3://scedc-pds"):
+            year_jday = tmp.split("/")[-1].rstrip(".ms")[-7:]
+            year, jday = int(year_jday[:4]), int(year_jday[4:])
+            begin_time = obspy.UTCDateTime(year=year, julday=jday)
+            end_time = begin_time + 86400  ## 1 day
+            stream = stream.trim(begin_time, end_time, pad=True, fill_value=0, nearest_sample=True)
     except Exception as e:
         print(f"Error reading {fname}:\n{e}")
         return None
