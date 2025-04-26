@@ -316,6 +316,8 @@ class CCIterableDataset(IterableDataset):
             next_dict = {}
 
         for l, (i, j) in enumerate(block_index):
+            if l < 12:
+                continue
             local_dict = {}
             row_index, col_index = self.group1[i], self.group2[j]
             row_matrix = self.row_matrix[row_index, :][:, col_index].tocoo()
@@ -603,6 +605,10 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
             logging.warning(f"Resampling {trace.id} from {trace.stats.sampling_rate} to {sampling_rate} Hz")
             try:
                 trace = trace.interpolate(sampling_rate, method="linear")
+                if tmp.startswith("s3://ncedc-pds"):
+                    trace = trace.trim(begin_time, end_time, pad=True, fill_value=0, nearest_sample=True)
+                elif tmp.startswith("s3://scedc-pds"):
+                    trace = trace.trim(begin_time, end_time, pad=True, fill_value=0, nearest_sample=True)
             except Exception as e:
                 print(f"Error resampling {trace.id}:\n{e}")
 
