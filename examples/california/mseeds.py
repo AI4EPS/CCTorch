@@ -45,13 +45,28 @@ for day in days:
 def parse_fname(fname, region="NC"):
     if region == "NC":
         station, network, channel, location, D, year, jday = fname.split("/")[-1].split(".")
+        instrument = channel[:2]
+        component = channel[2]
+
+    if region == "SC":
+        fname = fname.split("/")[-1]  #
+        network = fname[:2]
+        station = fname[2:7].rstrip("_")
+        instrument = fname[7:9]
+        component = fname[9]
+        channel = f"{instrument}{component}"
+        location = fname[10:12].rstrip("_")
+        year = fname[13:17]
+        jday = fname[17:20]
 
     return {
         "file_name": f"s3://{fname}",
         "station": station,
         "network": network,
-        "channel": channel,
         "location": location,
+        "instrument": instrument,
+        "component": component,
+        "channel": channel,
         "year": year,
         "jday": jday,
     }
@@ -59,6 +74,20 @@ def parse_fname(fname, region="NC"):
 
 mseeds = [parse_fname(mseed) for mseed in mseeds]
 mseeds = pd.DataFrame(mseeds)
+# print(mseeds)
+
+
+# %%
+region = "NC"  # %%
+valid_instruments = ["BH", "HH", "EH", "HN", "DP", "SH", "EP"]
+valid_components = ["3", "2", "1", "E", "N", "Z"]
+mseeds = mseeds[mseeds["instrument"].isin(valid_instruments)]
+mseeds = mseeds[mseeds["component"].isin(valid_components)]
+mseeds = mseeds.groupby(["year", "jday", "network", "station", "location", "instrument"]).agg(
+    file_name=("file_name", lambda x: "|".join(sorted(x)))
+)
+mseeds = mseeds.reset_index()
+
 
 # %%
 stations = pd.read_csv(
@@ -75,29 +104,43 @@ stations = pd.read_csv(
     },
 )
 
+stations["instrument"] = stations["channel"].str[:2]
+stations["component"] = stations["channel"].str[2]
+stations = stations.groupby(["network", "station", "location", "instrument"]).agg(
+    {"longitude": "first", "latitude": "first", "elevation_m": "first", "sensitivity": "first"}
+)
+stations = stations.reset_index()
+
 # %%
 mseeds = mseeds.fillna({"location": ""})
 stations = stations.fillna({"location": ""})
-mseeds = mseeds.astype({col: str for col in ["network", "station", "channel", "location"]})
-stations = stations.astype({col: str for col in ["network", "station", "channel", "location"]})
+mseeds = mseeds.astype({col: str for col in ["network", "station", "instrument", "location"]})
+stations = stations.astype({col: str for col in ["network", "station", "instrument", "location"]})
 
+# print(mseeds)
+# print(stations)
 # %%
-mseeds_ = mseeds.merge(
-    stations[["network", "station", "location", "channel", "longitude", "latitude"]],
-    on=["network", "station", "location", "channel"],
+mseeds = mseeds.merge(
+    stations[["network", "station", "location", "instrument", "longitude", "latitude"]],
+    on=[
+        "network",
+        "station",
+        "location",
+        "instrument",
+    ],
     how="inner",
 )
 
 # %%
 n_neighbors = 100  ## TODO: optimize the pairs
 knn = NearestNeighbors(n_neighbors=n_neighbors)
-knn.fit(mseeds_[["longitude", "latitude"]])
+knn.fit(mseeds[["longitude", "latitude"]])
 
 # %%
-distances, indices = knn.kneighbors(mseeds_[["longitude", "latitude"]])
+distances, indices = knn.kneighbors(mseeds[["longitude", "latitude"]])
 
 # %%
-mseeds_["file_name"].to_csv("mseeds.txt", index=False, header=True)
+mseeds["file_name"].to_csv("mseeds.txt", index=False, header=True)
 
 # %%
 with open("pairs.txt", "w") as f:

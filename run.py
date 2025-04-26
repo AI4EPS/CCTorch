@@ -556,7 +556,7 @@ def main(args):
         events_df.to_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{world_size:03d}_event.csv"), index=False)
 
     if args.mode == "AN":
-        MAX_THREADS = 32
+        MAX_THREADS = 4
 
         ## TODO: better logic to write CC results
         # with h5py.File(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5"), "w") as fp:
@@ -567,7 +567,9 @@ def main(args):
                 for data in tqdm(dataloader, position=rank, desc=f"{args.mode}: {rank}/{world_size}"):
                     result = ccmodel(data)
                     write_ambient_noise([result], fp, ccconfig, args.result_path, args.result_file, lock)
-                    # thread = executor.submit(write_ambient_noise, [result], fp, ccconfig, lock)
+                    # thread = executor.submit(
+                    #     write_ambient_noise, [result], fp, ccconfig, args.result_path, args.result_file, lock
+                    # )
                     # futures.add(thread)
                     # if len(futures) >= MAX_THREADS:
                     #     done, futures = wait(futures, return_when=FIRST_COMPLETED)
