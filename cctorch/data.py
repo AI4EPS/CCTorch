@@ -316,8 +316,7 @@ class CCIterableDataset(IterableDataset):
             next_dict = {}
 
         for l, (i, j) in enumerate(block_index):
-            if l < 12:
-                continue
+
             local_dict = {}
             row_index, col_index = self.group1[i], self.group2[j]
             row_matrix = self.row_matrix[row_index, :][:, col_index].tocoo()
