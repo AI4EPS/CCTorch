@@ -234,25 +234,29 @@ def main(args):
         pass
     elif args.mode == "AN":
         ## TODO add preprocess for ambient noise
-        if args.temporal_gradient:  ## convert to strain rate
-            preprocess.append(TemporalGradient(ccconfig.fs))
-        preprocess.append(TemporalMovingNormalization(int(ccconfig.maxlag * ccconfig.fs)))  # 30s for 25Hz
-        preprocess.append(
-            Filtering(
-                ccconfig.fmin,
-                ccconfig.fmax,
-                ccconfig.fs,
-                ccconfig.ftype,
-                ccconfig.alpha,
-                ccconfig.dtype,
-                ccconfig.transform_device,
-            )
-        )  # 50Hz # not working on M1
-        # preprocess.append(Decimation(ccconfig.decimate_factor))  # 25Hz
-        preprocess.append(T.Lambda(remove_spatial_median))
-        preprocess.append(TemporalMovingNormalization(int(2 * ccconfig.fs // ccconfig.decimate_factor)))  # 2s for 25Hz
+        # if args.temporal_gradient:  ## convert to strain rate
+        #     preprocess.append(TemporalGradient(ccconfig.fs))
+        # preprocess.append(TemporalMovingNormalization(int(ccconfig.maxlag * ccconfig.fs)))  # 30s for 25Hz
+        # preprocess.append(
+        #     Filtering(
+        #         ccconfig.fmin,
+        #         ccconfig.fmax,
+        #         ccconfig.fs,
+        #         ccconfig.ftype,
+        #         ccconfig.alpha,
+        #         ccconfig.dtype,
+        #         ccconfig.transform_device,
+        #     )
+        # )  # 50Hz # not working on M1
+        # # preprocess.append(Decimation(ccconfig.decimate_factor))  # 25Hz
+        # preprocess.append(T.Lambda(remove_spatial_median))
+        # preprocess.append(TemporalMovingNormalization(int(2 * ccconfig.fs // ccconfig.decimate_factor)))  # 2s for 25Hz
+        pass
 
-    preprocess = T.Compose(preprocess)
+    if len(preprocess) > 0:
+        preprocess = T.Compose(preprocess)
+    else:
+        preprocess = None
 
     postprocess = []
     if args.mode == "CC":

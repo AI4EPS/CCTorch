@@ -646,6 +646,11 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
     station_keys = sorted(list(station_ids.keys()))
     nx = len(station_ids)
     nt = max([len(tr.data) for tr in stream])
+
+    ## FIXME: HARDCODE for California
+    if tmp.startswith("s3://ncedc-pds") or tmp.startswith("s3://scedc-pds"):
+        nt = 8640001
+
     data = np.zeros([3, nx, nt], dtype=np.float32)
     for i, sta in enumerate(station_keys):
         for c in station_ids[sta]:
