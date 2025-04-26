@@ -327,7 +327,6 @@ class CCIterableDataset(IterableDataset):
                 next_dict = {}
                 idx = []
                 if l == 0:
-                    print(f"prefetch {l}")
                     for ii_, jj_ in zip(row_matrix.data, col_matrix.data):
                         if ii_ not in idx:
                             idx.append(ii_)
@@ -337,7 +336,6 @@ class CCIterableDataset(IterableDataset):
                     time.sleep(5)
 
                 if l + 1 < len(block_index):
-                    print(f"prefetch {l+1}")
                     i_, j_ = block_index[l + 1]
                     row_index_, col_index_ = self.group1[i_], self.group2[j_]
                     row_matrix_ = self.row_matrix[row_index_, :][:, col_index_].tocoo()
