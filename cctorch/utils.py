@@ -264,16 +264,40 @@ def write_cc_pairs(results, fp, ccconfig, lock=nullcontext(), plot_figure=False)
     #                         plt.close(fig)
 
 
-def write_ambient_noise(results, fp, ccconfig, lock=nullcontext(), plot_figure=False):
+def write_ambient_noise(results, fp, ccconfig, result_path, result_file, lock=nullcontext(), plot_figure=False):
     """
     Write ambient noise results to disk.
     """
+    fname_old = result_file
+    fname_new = None
     for meta in results:
         xcorr = meta["xcorr"].cpu().numpy()
         nb, nch, nx, nt = xcorr.shape
         for i in range(nb):
+
+            ## FIXME: HARDCODE
+            fname1 = meta["info1"]["file_name"][i]
+            fname2 = meta["info2"]["file_name"][i]
+            if fname1.startswith("s3://ncedc-pds"):
+                station, network, channel, location, D, year, jday = fname1.split("/")[-1].split(".")
+                id1 = f"{network}.{station}.{location}.{channel}"
+                station, network, channel, location, D, year, jday = fname2.split("/")[-1].split(".")
+                id2 = f"{network}.{station}.{location}.{channel}"
+                fname_new = f"{year}.{jday}.h5"
+            elif fname1.startswith("s3://scedc-pds"):
+                year_jday = fname1.split("/")[-1]
+                year, jday = year_jday[:4], year_jday[4:]
+                fname_new = f"{year}.{jday}.h5"
+            if (fname_new is not None) and (fname_new != fname_old):
+                with lock:
+                    fp.close()
+                    fname_old = fname_new
+                    print(f"Open {fname_new}")
+                    fp = h5py.File(os.path.join(result_path, fname_new), "a")
+
             data = np.squeeze(np.nan_to_num(xcorr[i, :, :, :]))
-            id1, id2 = meta["pair_index"][i]
+            if fname_new is None:
+                id1, id2 = meta["pair_index"][i]
 
             if f"{id1}/{id2}" not in fp:
                 gp = fp.create_group(f"{id1}/{id2}")

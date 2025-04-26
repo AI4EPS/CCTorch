@@ -311,31 +311,43 @@ class CCIterableDataset(IterableDataset):
             local_dict[self.data_list1.loc[ii, "file_name"]] = meta1
 
     def sample(self, block_index):
+        if self.cache:
+            executor = ThreadPoolExecutor(max_workers=8)
+            next_dict = {}
 
-        executor = ThreadPoolExecutor(max_workers=16)
-
-        for i, j in block_index:
+        for l, (i, j) in enumerate(block_index):
             local_dict = {}
             row_index, col_index = self.group1[i], self.group2[j]
             row_matrix = self.row_matrix[row_index, :][:, col_index].tocoo()
             col_matrix = self.col_matrix[row_index, :][:, col_index].tocoo()
 
+            ## Prefetch
             if self.cache and self.data_format1 != "memmap" and self.data_format2 != "memmap":
+                local_dict = next_dict.copy()
+                next_dict = {}
                 idx = []
-                for ii, jj in zip(row_matrix.data, col_matrix.data):
-                    if ii not in idx:
-                        idx.append(ii)
-                    if jj not in idx:
-                        idx.append(jj)
-                futures = [executor.submit(self.cache_data, local_dict, ii) for ii in idx]
-                time.sleep(5)
-                # with ThreadPoolExecutor(max_workers=16) as executor:
-                #     futures = [
-                #         executor.submit(self.cache_data, local_dict, ii)
-                #         for ii in set(row_matrix.data) | set(col_matrix.data)
-                #     ]
-                #     for future in tqdm(as_completed(futures), total=len(futures), desc="Caching data"):
-                #         future.result()
+                if l == 0:
+                    print(f"prefetch {l}")
+                    for ii_, jj_ in zip(row_matrix.data, col_matrix.data):
+                        if ii_ not in idx:
+                            idx.append(ii_)
+                        if jj_ not in idx:
+                            idx.append(jj_)
+                    futures = [executor.submit(self.cache_data, local_dict, k) for k in idx]
+                    time.sleep(5)
+
+                if l + 1 < len(block_index):
+                    print(f"prefetch {l+1}")
+                    i_, j_ = block_index[l + 1]
+                    row_index_, col_index_ = self.group1[i_], self.group2[j_]
+                    row_matrix_ = self.row_matrix[row_index_, :][:, col_index_].tocoo()
+                    col_matrix_ = self.col_matrix[row_index_, :][:, col_index_].tocoo()
+                    for ii_, jj_ in zip(row_matrix_.data, col_matrix_.data):
+                        if ii_ not in idx:
+                            idx.append(ii_)
+                        if jj_ not in idx:
+                            idx.append(jj_)
+                    futures = [executor.submit(self.cache_data, next_dict, k) for k in idx]
 
             data1, index1, info1, data2, index2, info2 = [], [], [], [], [], []
             num = 0

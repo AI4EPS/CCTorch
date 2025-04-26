@@ -14,5 +14,7 @@ results_*/
 *.npy
 *.j2k
 *.rb
+*.npz
 cctorch.log
 examples/california/inventory/
+.DS_Store

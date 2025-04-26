@@ -182,7 +182,8 @@ class CCModel(nn.Module):
 
         output = {}
         for key in meta:
-            if key not in ["data1", "data2", "info1", "info2"]:
+            # if key not in ["data1", "data2", "info1", "info2"]:
+            if key not in ["data1", "data2"]:
                 if isinstance(meta[key], torch.Tensor):
                     output[key] = meta[key].cpu()
                 else:

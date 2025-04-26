@@ -40,6 +40,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--data_format2", default="h5", type=str, help="data type in {h5, memmap, mseed}")
     parser.add_argument("--config", default=None, type=str, help="config file")
     parser.add_argument("--result_path", default="./results", type=str, help="results path")
+    parser.add_argument("--result_file", default="2024.001.h5", type=str, help="result file")
     parser.add_argument("--dataset_type", default="iterable", type=str, help="data loader type in {map, iterable}")
     parser.add_argument(
         "--block_size1", default=1024, type=int, help="Number of sample for the 1st data pair dimension"
@@ -556,16 +557,20 @@ def main(args):
 
     if args.mode == "AN":
         MAX_THREADS = 32
-        with h5py.File(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5"), "w") as fp:
+
+        ## TODO: better logic to write CC results
+        # with h5py.File(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5"), "w") as fp:
+        with h5py.File(os.path.join(args.result_path, args.result_file), "w") as fp:
             with ThreadPoolExecutor(max_workers=16) as executor:
                 futures = set()
                 lock = threading.Lock()
                 for data in tqdm(dataloader, position=rank, desc=f"{args.mode}: {rank}/{world_size}"):
                     result = ccmodel(data)
-                    thread = executor.submit(write_ambient_noise, [result], fp, ccconfig, lock)
-                    futures.add(thread)
-                    if len(futures) >= MAX_THREADS:
-                        done, futures = wait(futures, return_when=FIRST_COMPLETED)
+                    write_ambient_noise([result], fp, ccconfig, args.result_path, args.result_file, lock)
+                    # thread = executor.submit(write_ambient_noise, [result], fp, ccconfig, lock)
+                    # futures.add(thread)
+                    # if len(futures) >= MAX_THREADS:
+                    #     done, futures = wait(futures, return_when=FIRST_COMPLETED)
                 executor.shutdown(wait=True)
 
 
