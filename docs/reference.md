@@ -1,14 +1,9 @@
 ## CCModel
 
-## Input Data
+## Input Data & Prep-processing
 
-::: cctorch.data.read_das_eventphase_data_h5
+<!-- ::: cctorch.data.read_mseed
     options:
-      show_source: true
+      show_source: true -->
 
-### Prep-processing
-
-
-## Output Data
-
-### Post-processing
+## Output Data &  Post-processing

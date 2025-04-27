@@ -2,7 +2,7 @@
 
 ![](assets/diagram.png)
 
-## Single GPU
+<!-- ## Single GPU
 python run.py
 
 - Example for ambient noise
@@ -33,4 +33,4 @@ torchrun --standalone --nproc_per_node=4 \
 ## Multi Nodes using Slurm (e.g., using 2 nodes)
 ```
 sbatch --nodes=2 --ntasks=2 sbatch_run.sh 
-```
+``` -->
