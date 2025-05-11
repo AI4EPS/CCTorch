@@ -40,8 +40,27 @@ class CCModel(nn.Module):
         # AN
         self.nlag = config.nlag
         self.nfft = self.nlag * 2
-        self.window = torch.hann_window(self.nfft, periodic=False).to(self.device)
+        # self.window = torch.hann_window(self.nfft, periodic=False).to(self.device)
         self.spectral_whitening = config.spectral_whitening
+
+    def partial_hann_taper(self, length, taper_fraction=0.04, device="cpu"):
+        # print('Chris flag taper', length, taper_fraction)
+        n_taper = int(length * taper_fraction)
+        if n_taper == 0:
+            return torch.ones(length, device=device)
+
+        # Hann window for edges
+        x = torch.linspace(0, torch.pi / 2, n_taper, device=device)
+        taper_edge = torch.sin(x)**2   # sin² taper
+
+        taper_start = taper_edge
+        taper_end = taper_edge.flip(0)
+
+
+        # Build full window: start + flat + end
+        ones_middle = torch.ones(length - 2 * n_taper, device=device)
+        window = torch.cat([taper_start, ones_middle, taper_end], dim=0)
+        return window
 
     def forward(self, x):
         """Perform cross-correlation on input data
@@ -54,7 +73,7 @@ class CCModel(nn.Module):
                     - data (torch.Tensor): data2 with shape (batch, nsta/nch, nt)
                     - info (dict): information information of data2
         """
-
+        self.window = self.partial_hann_taper(self.nfft, 0.04)
         x1, x2 = x
         if self.to_device:
             data1 = x1["data"].to(self.device)
@@ -158,6 +177,7 @@ class CCModel(nn.Module):
                 data2 = torch.exp(1j * data2.angle())
 
             xcor = torch.fft.irfft(torch.sum(data1 * torch.conj(data2), dim=-1), dim=-1)
+            xcor = xcor / data1.size(1)
             xcor = torch.roll(xcor, self.nlag, dims=-1)
             xcor = xcor.view(nb1, nc1, nx1, -1)
 
