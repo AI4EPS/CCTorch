@@ -551,11 +551,11 @@ def read_data(file_name, data_path, format="h5", mode="CC", config={}):
         if format == "h5":
             data, info = read_das_continuous_data_h5(data_path / file_name, dataset_keys=[])
         elif format == "mseed":
-            data, info = read_mseed(file_name, config=config)
+            data, info = read_mseed(file_name, config=config, sampling_rate=config.fs)
 
     elif mode == "TM":
         if format == "mseed":
-            data, info = read_mseed(file_name, config=config)
+            data, info = read_mseed(file_name, config=config, sampling_rate=config.fs)
             # data, info = read_mseed_3c(file_name, config=config)
     else:
         raise ValueError(f"Unknown mode: {mode}")
@@ -576,6 +576,7 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
                 stream += meta
             # stream += obspy.read(tmp)
         stream = stream.merge(fill_value="latest")
+        stream.detrend("demean")
 
         ## FIXME: HARDCODE for California
         if tmp.startswith("s3://ncedc-pds"):
@@ -603,10 +604,10 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
         if trace.stats.sampling_rate != sampling_rate:
             logging.warning(f"Resampling {trace.id} from {trace.stats.sampling_rate} to {sampling_rate} Hz")
             try:
-                trace = trace.interpolate(sampling_rate, method="linear")
-                if tmp.startswith("s3://ncedc-pds"):
-                    trace = trace.trim(begin_time, end_time, pad=True, fill_value=0, nearest_sample=True)
-                elif tmp.startswith("s3://scedc-pds"):
+                trace.filter("lowpass", freq=0.45 * sampling_rate, zerophase=True, corners=8)
+                trace.interpolate(method="lanczos", sampling_rate=sampling_rate, a=1.0)
+                # trace = trace.interpolate(sampling_rate, method="linear")
+                if tmp.startswith(("s3://ncedc-pds", "s3://scedc-pds")):
                     trace = trace.trim(begin_time, end_time, pad=True, fill_value=0, nearest_sample=True)
             except Exception as e:
                 print(f"Error resampling {trace.id}:\n{e}")
@@ -647,10 +648,10 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
     nx = len(station_ids)
     nt = max([len(tr.data) for tr in stream])
 
-    ## FIXME: HARDCODE for California
-    if tmp.startswith("s3://ncedc-pds") or tmp.startswith("s3://scedc-pds"):
-        nt = 8640001
-
+    # ## FIXME: HARDCODE for California
+    # if tmp.startswith("s3://ncedc-pds") or tmp.startswith("s3://scedc-pds"):
+    #     nt = 8640001
+        
     data = np.zeros([3, nx, nt], dtype=np.float32)
     for i, sta in enumerate(station_keys):
         for c in station_ids[sta]:
