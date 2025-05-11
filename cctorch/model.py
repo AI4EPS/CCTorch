@@ -73,7 +73,7 @@ class CCModel(nn.Module):
                     - data (torch.Tensor): data2 with shape (batch, nsta/nch, nt)
                     - info (dict): information information of data2
         """
-        self.window = self.partial_hann_taper(self.nfft, 0.04)
+        self.window = self.partial_hann_taper(self.nfft, 0.04, device=self.device)
         x1, x2 = x
         if self.to_device:
             data1 = x1["data"].to(self.device)
