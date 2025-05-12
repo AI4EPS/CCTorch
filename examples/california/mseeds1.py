@@ -178,6 +178,7 @@ stations = pd.read_csv(
 
 stations["instrument"] = stations["channel"].str[:2]
 stations["component"] = stations["channel"].str[2]
+stations = stations.fillna({"location": ""})
 stations = stations.groupby(["network", "station", "location", "instrument"]).agg(
     {"longitude": "first", "latitude": "first", "elevation_m": "first", "sensitivity": "first"}
 )
