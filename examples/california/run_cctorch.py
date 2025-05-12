@@ -22,7 +22,7 @@ if __name__ == "__main__":
     for jday in jdays:
         cmd = f"python downsample.py --year {year} --jday {jday}"
         print(cmd)
-        # os.system(cmd)
+        os.system(cmd)
 
         cmd = f"python mseeds2.py --year {year} --jday {jday}"
         print(cmd)

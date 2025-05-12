@@ -107,13 +107,11 @@ mseeds = mseeds.drop_duplicates(
     subset=["station", "network", "location", "instrument", "component", "channel", "year", "jday"]
 )
 
-
 mseeds = mseeds.groupby(["year", "jday", "network", "station", "location", "instrument"], observed=True).agg(
     file_name=("file_name", lambda x: "|".join(sorted(x)))
 )
 mseeds = mseeds.reset_index()
 
-mseeds = mseeds.drop_duplicates(subset="station", keep="first")
 # %%
 stations = pd.read_csv(
     # "stations.csv",
@@ -132,6 +130,7 @@ stations = pd.read_csv(
 
 stations["instrument"] = stations["channel"].str[:2]
 stations["component"] = stations["channel"].str[2]
+stations = stations.fillna({"location": ""})
 stations = stations.groupby(["network", "station", "location", "instrument"]).agg(
     {"longitude": "first", "latitude": "first", "elevation_m": "first", "sensitivity": "first"}
 )
@@ -154,6 +153,48 @@ mseeds = mseeds.merge(
     ],
     how="inner",
 )
+
+# %%
+location_priorities = (
+    "",
+    "00",
+    "10",
+    "01",
+    "20",
+    "02",
+    "30",
+    "03",
+    "40",
+    "04",
+    "50",
+    "05",
+    "60",
+    "06",
+    "70",
+    "07",
+    "80",
+    "08",
+    "90",
+    "09",
+)
+location_priority_map = {loc: i for i, loc in enumerate(location_priorities)}
+instrument_priorities = ("HH", "BH", "MH", "EH", "LH", "HL", "BL", "ML", "EL", "LL", "SH")
+instrument_priority_map = {ch: i for i, ch in enumerate(instrument_priorities)}
+# component_priorities = ("E", "N", "Z", "1", "2", "3")
+# component_priority_map = {ch: i for i, ch in enumerate(component_priorities)}
+mseeds["location_priority"] = mseeds["location"].map(location_priority_map)
+mseeds["instrument_priority"] = mseeds["instrument"].apply(
+    lambda x: instrument_priority_map.get(x, len(instrument_priorities))
+)
+# mseeds["component_priority"] = mseeds["component"].apply(
+#     lambda x: component_priority_map.get(x, len(component_priorities))
+# )
+mseeds.sort_values(["year", "jday", "network", "station", "location_priority", "instrument_priority"], inplace=True)
+mseeds.drop(["location_priority", "instrument_priority"], axis=1, inplace=True)
+print(f"Before grouping: {len(mseeds) = }")
+print(mseeds.head())
+mseeds = mseeds.groupby(["year", "jday", "network", "station"]).first().reset_index()
+print(f"After grouping: {len(mseeds) = }")
 
 # %%
 distances, indices = get_neighbors_within_radius(mseeds, radius_km=knn_dist)
