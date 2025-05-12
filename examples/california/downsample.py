@@ -5,7 +5,7 @@ import logging
 import os
 from args import parse_args
 import pandas as pd
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
 from tqdm import tqdm
 import datetime
 
@@ -86,9 +86,11 @@ def downsample_mseed(fname, highpass_filter=False, sampling_rate=20, root_path="
 
     for tr in stream:
         tr.data = tr.data.astype(np.float32)
-        starttime = tr.stats.starttime + datetime.timedelta(hours=12)
-        year = starttime.year
-        jday = starttime.julday
+        starttime = tr.stats.starttime
+        endtime = tr.stats.endtime
+        midtime = starttime + (endtime - starttime) / 2
+        year = midtime.year
+        jday = midtime.julday
         # if year is None:
         #     year = starttime.year
         # if jday is None:
@@ -131,7 +133,8 @@ if __name__ == "__main__":
     num_workers = 16
     print(f"Processing {len(mseeds)} files using {num_workers} workers")
 
-    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+    # with ThreadPoolExecutor(max_workers=num_workers) as executor:
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
         futures = []
 
         for mseed in mseeds:

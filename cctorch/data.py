@@ -557,11 +557,11 @@ def read_data(file_name, data_path, format="h5", mode="CC", config={}):
         if format == "h5":
             data, info = read_das_continuous_data_h5(data_path / file_name, dataset_keys=[])
         elif format == "mseed":
-            data, info = read_mseed(file_name, config=config)
+            data, info = read_mseed(file_name, sampling_rate=config.fs, config=config)
 
     elif mode == "TM":
         if format == "mseed":
-            data, info = read_mseed(file_name, config=config)
+            data, info = read_mseed(file_name, sampling_rate=config.fs, config=config)
             # data, info = read_mseed_3c(file_name, config=config)
     else:
         raise ValueError(f"Unknown mode: {mode}")
@@ -657,7 +657,7 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
     ## FIXME: HARDCODE for California
     if tmp.startswith("s3://ncedc-pds") or tmp.startswith("s3://scedc-pds") or tmp.startswith("gs://cctorch"):
         # nt = 8640001
-        nt = 24 * 60 * 60 * sampling_rate + 1
+        nt = int(24 * 60 * 60 * sampling_rate) + 1
 
     data = np.zeros([3, nx, nt], dtype=np.float32)
     for i, sta in enumerate(station_keys):
