@@ -656,7 +656,8 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
 
     ## FIXME: HARDCODE for California
     if tmp.startswith("s3://ncedc-pds") or tmp.startswith("s3://scedc-pds") or tmp.startswith("gs://cctorch"):
-        nt = 8640001
+        # nt = 8640001
+        nt = 24 * 60 * 60 * sampling_rate + 1
 
     data = np.zeros([3, nx, nt], dtype=np.float32)
     for i, sta in enumerate(station_keys):
