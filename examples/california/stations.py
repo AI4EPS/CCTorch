@@ -8,7 +8,10 @@ import fsspec
 import obspy
 import pandas as pd
 from tqdm import tqdm
+from args import parse_args
 
+
+args = parse_args()
 
 # %%
 fs = fsspec.filesystem("gs", anon=True)
@@ -59,3 +62,12 @@ for network in tqdm(inventory, desc="Writing inventory"):
 # %%
 stations = pd.DataFrame.from_dict(station_dict, orient="index")
 stations.to_csv(f"stations.csv", index=False)
+
+
+# %%
+protocol = args.protocol
+token_file = args.token_file
+bucket = args.bucket
+
+fs = fsspec.filesystem(protocol, token=token_file)
+fs.put(f"stations.csv", f"{bucket}/ambient_noise/network/stations.csv")

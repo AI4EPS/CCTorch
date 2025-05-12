@@ -300,7 +300,8 @@ class CCIterableDataset(IterableDataset):
             info.update({"file_name": self.data_list1.loc[ii, "file_name"]})
             if "channel_index" in self.data_list1.columns:  # AN
                 info.update({"channel_index": self.data_list1.loc[ii, "channel_index"]})
-            data = torch.tensor(data, dtype=self.dtype).to(self.device)
+            # data = torch.tensor(data, dtype=self.dtype).to(self.device)
+            data = torch.tensor(data, dtype=self.dtype)
             if self.transforms is not None:
                 data = self.transforms(data)
             meta1 = {
@@ -325,6 +326,8 @@ class CCIterableDataset(IterableDataset):
             ## Prefetch
             if self.cache and self.data_format1 != "memmap" and self.data_format2 != "memmap":
                 local_dict = next_dict.copy()
+                for k in local_dict:
+                    local_dict[k]["data"] = local_dict[k]["data"].to(self.device)
                 next_dict = {}
                 idx = []
                 if l == 0:
@@ -601,7 +604,7 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
 
         ## interpolate to 100 Hz
         if trace.stats.sampling_rate != sampling_rate:
-            logging.warning(f"Resampling {trace.id} from {trace.stats.sampling_rate} to {sampling_rate} Hz")
+            logging.info(f"Resampling {trace.id} from {trace.stats.sampling_rate} to {sampling_rate} Hz")
             try:
                 trace = trace.interpolate(sampling_rate, method="linear")
                 if tmp.startswith("s3://ncedc-pds"):
@@ -622,6 +625,7 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
 
         ## highpass filtering > 1Hz
         if highpass_filter:
+            logging.info(f"Highpass filtering {trace.id} from {trace.stats.sampling_rate} to 1 Hz")
             trace = trace.filter("highpass", freq=1.0)
 
         tmp_stream.append(trace)
@@ -648,7 +652,7 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
     nt = max([len(tr.data) for tr in stream])
 
     ## FIXME: HARDCODE for California
-    if tmp.startswith("s3://ncedc-pds") or tmp.startswith("s3://scedc-pds"):
+    if tmp.startswith("s3://ncedc-pds") or tmp.startswith("s3://scedc-pds") or tmp.startswith("gs://cctorch"):
         nt = 8640001
 
     data = np.zeros([3, nx, nt], dtype=np.float32)
