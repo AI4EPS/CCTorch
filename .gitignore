@@ -18,3 +18,5 @@ results_*/
 cctorch.log
 examples/california/inventory/
 .DS_Store
+examples/california/mseed_20Hz/
+examples/california/waveforms/

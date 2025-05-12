@@ -288,7 +288,7 @@ class CCIterableDataset(IterableDataset):
 
         return iter(self.sample(self.block_index[worker_id::num_workers]))
 
-    def cache_data(self, local_dict, ii):
+    def cache_data(self, local_dict, ii, to_device=False):
         if self.data_list1.loc[ii, "file_name"] not in local_dict:
             data, info = read_data(
                 self.data_list1.loc[ii, "file_name"],
@@ -302,6 +302,8 @@ class CCIterableDataset(IterableDataset):
                 info.update({"channel_index": self.data_list1.loc[ii, "channel_index"]})
             # data = torch.tensor(data, dtype=self.dtype).to(self.device)
             data = torch.tensor(data, dtype=self.dtype)
+            if to_device:
+                data = data.to(self.device)
             if self.transforms is not None:
                 data = self.transforms(data)
             meta1 = {
@@ -313,7 +315,7 @@ class CCIterableDataset(IterableDataset):
 
     def sample(self, block_index):
         if self.cache:
-            executor = ThreadPoolExecutor(max_workers=8)
+            executor = ThreadPoolExecutor(max_workers=16)
             next_dict = {}
 
         for l, (i, j) in enumerate(block_index):
@@ -328,6 +330,7 @@ class CCIterableDataset(IterableDataset):
                 local_dict = next_dict.copy()
                 for k in local_dict:
                     local_dict[k]["data"] = local_dict[k]["data"].to(self.device)
+                del next_dict
                 next_dict = {}
                 idx = []
                 if l == 0:
@@ -336,7 +339,7 @@ class CCIterableDataset(IterableDataset):
                             idx.append(ii_)
                         if jj_ not in idx:
                             idx.append(jj_)
-                    futures = [executor.submit(self.cache_data, local_dict, k) for k in idx]
+                    futures = [executor.submit(self.cache_data, local_dict, k, to_device=True) for k in idx]
                     time.sleep(5)
 
                 if l + 1 < len(block_index):
@@ -349,7 +352,7 @@ class CCIterableDataset(IterableDataset):
                             idx.append(ii_)
                         if jj_ not in idx:
                             idx.append(jj_)
-                    futures = [executor.submit(self.cache_data, next_dict, k) for k in idx]
+                    futures = [executor.submit(self.cache_data, next_dict, k, to_device=False) for k in idx]
 
             data1, index1, info1, data2, index2, info2 = [], [], [], [], [], []
             num = 0
