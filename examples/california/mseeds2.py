@@ -13,6 +13,7 @@ args = parse_args()
 year = f"{args.year:04d}"
 jday = f"{args.jday:03d}"
 knn_dist = args.knn_dist
+print(f"{year = }, {jday = }, {knn_dist = }")
 
 protocol = args.protocol
 token_file = args.token_file
@@ -79,11 +80,11 @@ def scan_mseeds(target_year="2024", target_jday="001"):
 
 def get_neighbors_within_radius(df, radius_km=100):
 
-    proj = Proj(proj="aeqd", lat_0=df["latitude"].mean(), lon_0=df["longitude"].mean())
-    coords = proj(df["longitude"], df["latitude"], inverse=True)
+    proj = Proj(proj="aeqd", lat_0=df["latitude"].mean(), lon_0=df["longitude"].mean(), units="km")
+    coords = proj(df["longitude"], df["latitude"])
     coords = np.array(coords).T
 
-    knn = NearestNeighbors(radius=radius_km, metric="haversine")
+    knn = NearestNeighbors(radius=radius_km)
     knn.fit(coords)
 
     distances, indices = knn.radius_neighbors(coords, radius=radius_km, return_distance=True)
@@ -95,7 +96,8 @@ mseeds = scan_mseeds(target_year=year, target_jday=jday)
 mseeds = pd.DataFrame(mseeds)
 
 # %%
-valid_instruments = ["HH", "BH", "EH"]  # ["SH", "DP", "EP", "HN"]
+# valid_instruments = ["HH", "BH", "EH"]  # ["SH", "DP", "EP", "HN"]
+valid_instruments = ["HH", "BH", "EH", "SH", "DP", "EP", "HN"]
 valid_components = ["3", "2", "1", "E", "N", "Z"]
 
 mseeds = mseeds[mseeds["instrument"].isin(valid_instruments)]
@@ -210,3 +212,5 @@ with open(f"pairs2_{year}_{jday}.txt", "w") as f:
 fs = fsspec.filesystem(protocol, token=token_file)
 fs.put(f"mseeds2_{year}_{jday}.txt", f"{bucket}/mseed_list/mseeds2_{year}_{jday}.txt")
 fs.put(f"pairs2_{year}_{jday}.txt", f"{bucket}/mseed_list/pairs2_{year}_{jday}.txt")
+print(f"mseeds2_{year}_{jday}.txt -> {bucket}/mseed_list/mseeds2_{year}_{jday}.txt")
+print(f"pairs2_{year}_{jday}.txt -> {bucket}/mseed_list/pairs2_{year}_{jday}.txt")

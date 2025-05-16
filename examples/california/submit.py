@@ -61,7 +61,7 @@ task.set_resources(
         accelerators="V100:1",
         # cpus=8,
         disk_tier="low",
-        disk_size=50,  # GB
+        disk_size=200,  # GB
         memory=None,
         use_spot=True,
     ),

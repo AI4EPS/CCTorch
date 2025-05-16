@@ -279,15 +279,56 @@ def write_ambient_noise(results, fp, ccconfig, result_path, result_file, lock=nu
             fname1 = meta["info1"]["file_name"][i]
             fname2 = meta["info2"]["file_name"][i]
             if fname1.startswith("s3://ncedc-pds"):
-                station, network, channel, location, D, year, jday = fname1.split("/")[-1].split(".")
-                id1 = f"{network}.{station}.{location}.{channel}"
-                station, network, channel, location, D, year, jday = fname2.split("/")[-1].split(".")
-                id2 = f"{network}.{station}.{location}.{channel}"
-                fname_new = f"{year}.{jday}.h5"
+                station1, network1, channel1, location1, D1, year1, jday1 = (
+                    fname1.split("|")[-1].split("/")[-1].split(".")
+                )
+                id1 = f"{network1}.{station1}.{location1}.{channel1[:-1]}"
+                station2, network2, channel2, location2, D2, year2, jday2 = (
+                    fname2.split("|")[-1].split("/")[-1].split(".")
+                )
+                id2 = f"{network2}.{station2}.{location2}.{channel2[:-1]}"
+                assert year1 == year2
+                assert jday1 == jday2
+                fname_new = f"{year1}.{jday1}.h5"
             elif fname1.startswith("s3://scedc-pds"):
-                year_jday = fname1.split("/")[-1]
-                year, jday = year_jday[:4], year_jday[4:]
-                fname_new = f"{year}.{jday}.h5"
+                fname1 = fname1.split("|")[-1].split("/")[-1]  #
+                network1 = fname1[:2]
+                station1 = fname1[2:7].rstrip("_")
+                instrument1 = fname1[7:9]
+                component1 = fname1[9]
+                channel1 = f"{instrument1}{component1}"
+                location1 = fname1[10:12].rstrip("_")
+                year1 = fname1[13:17]
+                jday1 = fname1[17:20]
+                fname2 = fname2.split("|")[-1].split("/")[-1]
+                network2 = fname2[:2]
+                station2 = fname2[2:7].rstrip("_")
+                instrument2 = fname2[7:9]
+                component2 = fname2[9]
+                channel2 = f"{instrument2}{component2}"
+                location2 = fname2[10:12].rstrip("_")
+                year2 = fname2[13:17]
+                jday2 = fname2[17:20]
+                assert year1 == year2
+                assert jday1 == jday2
+                id1 = f"{network1}.{station1}.{location1}.{channel1[:-1]}"
+                id2 = f"{network2}.{station2}.{location2}.{channel2[:-1]}"
+                fname_new = f"{year1}.{jday1}.h5"
+            elif fname1.startswith("gs://cctorch"):
+                tmp1 = fname1.split("|")[-1].split("/")
+                year1, jday1 = tmp1[-3], tmp1[-2]
+                network1, station1, location1, channel1, _ = tmp1[-1].split(".")
+                tmp2 = fname2.split("|")[-1].split("/")
+                year2, jday2 = tmp2[-3], tmp2[-2]
+                network2, station2, location2, channel2, _ = tmp2[-1].split(".")
+                assert year1 == year2
+                assert jday1 == jday2
+                id1 = f"{network1}.{station1}.{location1}.{channel1[:-1]}"
+                id2 = f"{network2}.{station2}.{location2}.{channel2[:-1]}"
+                fname_new = f"{year1}.{jday1}.h5"
+            else:
+                raise ValueError(f"Unknown file format: {fname1}")
+
             if (fname_new is not None) and (fname_new != fname_old):
                 with lock:
                     fp.close()
