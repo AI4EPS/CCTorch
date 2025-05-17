@@ -328,7 +328,7 @@ class CCIterableDataset(IterableDataset):
             ## Prefetch
             if self.cache and self.data_format1 != "memmap" and self.data_format2 != "memmap":
                 del local_dict
-                local_dict = next_dict
+                local_dict = next_dict.copy()
                 for k in local_dict:
                     local_dict[k]["data"] = local_dict[k]["data"].to(self.device)
                 del next_dict
