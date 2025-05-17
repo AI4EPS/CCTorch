@@ -243,6 +243,7 @@ print(f"Before grouping: {len(mseeds) = }")
 print(mseeds.head())
 mseeds = mseeds.groupby(["year", "jday", "network", "station"]).first().reset_index()
 print(f"After grouping: {len(mseeds) = }")
+mseeds = mseeds.sort_values(["year", "jday", "network", "station"])
 
 # %%
 distances, indices = get_neighbors_within_radius(mseeds, radius_km=knn_dist)
@@ -252,11 +253,11 @@ mseeds["file_name"].to_csv(f"mseeds1_{year}_{jday}.txt", index=False, header=Tru
 
 # %%
 with open(f"pairs1_{year}_{jday}.txt", "w") as f:
-    f.writelines(f"{i},{j}\n" for i in range(len(indices)) for j in indices[i])
+    f.writelines(f"{i},{j}\n" for i in range(len(indices)) for j in indices[i] if i <= j)
 
 # %%
 fs = fsspec.filesystem(protocol, token=token_file)
 fs.put(f"mseeds1_{year}_{jday}.txt", f"{bucket}/mseed_list/mseeds1_{year}_{jday}.txt")
 fs.put(f"pairs1_{year}_{jday}.txt", f"{bucket}/mseed_list/pairs1_{year}_{jday}.txt")
-print(f"mseeds2_{year}_{jday}.txt -> {bucket}/mseed_list/mseeds2_{year}_{jday}.txt")
-print(f"pairs2_{year}_{jday}.txt -> {bucket}/mseed_list/pairs2_{year}_{jday}.txt")
+print(f"mseeds1_{year}_{jday}.txt -> {bucket}/mseed_list/mseeds1_{year}_{jday}.txt")
+print(f"pairs1_{year}_{jday}.txt -> {bucket}/mseed_list/pairs1_{year}_{jday}.txt")

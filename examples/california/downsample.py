@@ -130,7 +130,7 @@ if __name__ == "__main__":
         "bucket": bucket,
     }
 
-    num_workers = 16
+    num_workers = os.cpu_count()
     print(f"Processing {len(mseeds)} files using {num_workers} workers")
 
     # with ThreadPoolExecutor(max_workers=num_workers) as executor:

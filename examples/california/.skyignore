@@ -1,0 +1,6 @@
+results/
+mseed_20Hz/
+waveforms/
+mseeds*.txt
+pairs*.txt
+__pycache__

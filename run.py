@@ -560,24 +560,36 @@ def main(args):
         events_df.to_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{world_size:03d}_event.csv"), index=False)
 
     if args.mode == "AN":
-        MAX_THREADS = 4
+        MAX_THREADS = 16
 
         ## TODO: better logic to write CC results
         # with h5py.File(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5"), "w") as fp:
         with h5py.File(os.path.join(args.result_path, args.result_file), "w") as fp:
-            with ThreadPoolExecutor(max_workers=16) as executor:
+            with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
                 futures = set()
                 lock = threading.Lock()
+
                 for data in tqdm(dataloader, position=rank, desc=f"{args.mode}: {rank}/{world_size}"):
                     result = ccmodel(data)
-                    write_ambient_noise([result], fp, ccconfig, args.result_path, args.result_file, lock)
-                    # thread = executor.submit(
-                    #     write_ambient_noise, [result], fp, ccconfig, args.result_path, args.result_file, lock
-                    # )
-                    # futures.add(thread)
-                    # if len(futures) >= MAX_THREADS:
-                    #     done, futures = wait(futures, return_when=FIRST_COMPLETED)
-                executor.shutdown(wait=True)
+
+                    future = executor.submit(
+                        write_ambient_noise, [result], fp, ccconfig, args.result_path, args.result_file, lock
+                    )
+                    futures.add(future)
+
+                    if len(futures) >= MAX_THREADS:
+                        done, futures = wait(futures, return_when=FIRST_COMPLETED)
+                        for completed in done:
+                            try:
+                                completed.result()
+                            except Exception as e:
+                                logging.error(f"Error writing result: {e}")
+
+                for future in futures:
+                    try:
+                        future.result()
+                    except Exception as e:
+                        logging.error(f"Error writing result: {e}")
 
 
 if __name__ == "__main__":

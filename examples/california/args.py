@@ -11,7 +11,8 @@ def parse_args():
     parser.add_argument("--token_file", type=str, default="application_default_credentials.json")
     parser.add_argument("--bucket", type=str, default="gs://cctorch/ambient_noise")
     parser.add_argument("--root_path", type=str, default="./")
-    parser.add_argument("--knn_dist", type=int, default=500)
+    parser.add_argument("--result_path", type=str, default="./results")
+    parser.add_argument("--knn_dist", type=int, default=300)
     args = parser.parse_args()
 
     return args

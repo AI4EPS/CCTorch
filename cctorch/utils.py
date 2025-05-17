@@ -289,7 +289,7 @@ def write_ambient_noise(results, fp, ccconfig, result_path, result_file, lock=nu
                 id2 = f"{network2}.{station2}.{location2}.{channel2[:-1]}"
                 assert year1 == year2
                 assert jday1 == jday2
-                fname_new = f"{year1}.{jday1}.h5"
+                fname_new = f"{year1}/{year1}.{jday1}.h5"
             elif fname1.startswith("s3://scedc-pds"):
                 fname1 = fname1.split("|")[-1].split("/")[-1]  #
                 network1 = fname1[:2]
@@ -313,7 +313,7 @@ def write_ambient_noise(results, fp, ccconfig, result_path, result_file, lock=nu
                 assert jday1 == jday2
                 id1 = f"{network1}.{station1}.{location1}.{channel1[:-1]}"
                 id2 = f"{network2}.{station2}.{location2}.{channel2[:-1]}"
-                fname_new = f"{year1}.{jday1}.h5"
+                fname_new = f"{year1}/{year1}.{jday1}.h5"
             elif fname1.startswith("gs://cctorch"):
                 tmp1 = fname1.split("|")[-1].split("/")
                 year1, jday1 = tmp1[-3], tmp1[-2]
@@ -325,7 +325,7 @@ def write_ambient_noise(results, fp, ccconfig, result_path, result_file, lock=nu
                 assert jday1 == jday2
                 id1 = f"{network1}.{station1}.{location1}.{channel1[:-1]}"
                 id2 = f"{network2}.{station2}.{location2}.{channel2[:-1]}"
-                fname_new = f"{year1}.{jday1}.h5"
+                fname_new = f"{year1}/{year1}.{jday1}.h5"
             else:
                 raise ValueError(f"Unknown file format: {fname1}")
 
