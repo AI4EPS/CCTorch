@@ -20,6 +20,7 @@ import pandas as pd
 import scipy
 import scipy.signal
 import torch
+import zarr
 from tqdm.auto import tqdm
 
 
@@ -264,92 +265,85 @@ def write_cc_pairs(results, fp, ccconfig, lock=nullcontext(), plot_figure=False)
     #                         plt.close(fig)
 
 
-def write_ambient_noise(results, fp, ccconfig, result_path, result_file, lock=nullcontext(), plot_figure=False):
+def write_ambient_noise(meta, fp, ccconfig, result_path, result_file, lock=nullcontext(), plot_figure=False):
     """
     Write ambient noise results to disk.
     """
-    fname_old = result_file
-    fname_new = None
-    for meta in results:
-        xcorr = meta["xcorr"].cpu().numpy()
-        nb, nch, nx, nt = xcorr.shape
-        for i in range(nb):
 
-            ## FIXME: HARDCODE
-            fname1 = meta["info1"]["file_name"][i]
-            fname2 = meta["info2"]["file_name"][i]
-            if fname1.startswith("s3://ncedc-pds"):
-                station1, network1, channel1, location1, D1, year1, jday1 = (
-                    fname1.split("|")[-1].split("/")[-1].split(".")
-                )
-                id1 = f"{network1}.{station1}.{location1}.{channel1[:-1]}"
-                station2, network2, channel2, location2, D2, year2, jday2 = (
-                    fname2.split("|")[-1].split("/")[-1].split(".")
-                )
-                id2 = f"{network2}.{station2}.{location2}.{channel2[:-1]}"
-                assert year1 == year2
-                assert jday1 == jday2
-                fname_new = f"{year1}/{year1}.{jday1}.h5"
-            elif fname1.startswith("s3://scedc-pds"):
-                fname1 = fname1.split("|")[-1].split("/")[-1]  #
-                network1 = fname1[:2]
-                station1 = fname1[2:7].rstrip("_")
-                instrument1 = fname1[7:9]
-                component1 = fname1[9]
-                channel1 = f"{instrument1}{component1}"
-                location1 = fname1[10:12].rstrip("_")
-                year1 = fname1[13:17]
-                jday1 = fname1[17:20]
-                fname2 = fname2.split("|")[-1].split("/")[-1]
-                network2 = fname2[:2]
-                station2 = fname2[2:7].rstrip("_")
-                instrument2 = fname2[7:9]
-                component2 = fname2[9]
-                channel2 = f"{instrument2}{component2}"
-                location2 = fname2[10:12].rstrip("_")
-                year2 = fname2[13:17]
-                jday2 = fname2[17:20]
-                assert year1 == year2
-                assert jday1 == jday2
-                id1 = f"{network1}.{station1}.{location1}.{channel1[:-1]}"
-                id2 = f"{network2}.{station2}.{location2}.{channel2[:-1]}"
-                fname_new = f"{year1}/{year1}.{jday1}.h5"
-            elif fname1.startswith("gs://cctorch"):
-                tmp1 = fname1.split("|")[-1].split("/")
-                year1, jday1 = tmp1[-3], tmp1[-2]
-                network1, station1, location1, channel1, _ = tmp1[-1].split(".")
-                tmp2 = fname2.split("|")[-1].split("/")
-                year2, jday2 = tmp2[-3], tmp2[-2]
-                network2, station2, location2, channel2, _ = tmp2[-1].split(".")
-                assert year1 == year2
-                assert jday1 == jday2
-                id1 = f"{network1}.{station1}.{location1}.{channel1[:-1]}"
-                id2 = f"{network2}.{station2}.{location2}.{channel2[:-1]}"
-                fname_new = f"{year1}/{year1}.{jday1}.h5"
-            else:
-                raise ValueError(f"Unknown file format: {fname1}")
+    xcorr = meta["xcorr"].cpu().numpy()
+    nb, nch, nx, nt = xcorr.shape
+    for i in range(nb):
 
-            if (fname_new is not None) and (fname_new != fname_old):
-                with lock:
-                    fp.close()
-                    fname_old = fname_new
-                    print(f"Open {fname_new}")
-                    fp = h5py.File(os.path.join(result_path, fname_new), "a")
+        ## FIXME: HARDCODE
+        fname1 = meta["info1"]["file_name"][i]
+        fname2 = meta["info2"]["file_name"][i]
+        if fname1.startswith("s3://ncedc-pds"):
+            station1, network1, channel1, location1, D1, year1, jday1 = fname1.split("|")[-1].split("/")[-1].split(".")
+            station2, network2, channel2, location2, D2, year2, jday2 = fname2.split("|")[-1].split("/")[-1].split(".")
+            id1 = f"{network1}.{station1}.{location1}.{channel1[:-1]}"
+            id2 = f"{network2}.{station2}.{location2}.{channel2[:-1]}"
+            assert year1 == year2
+            assert jday1 == jday2
+            # fname_new = f"{year1}/{year1}.{jday1}.{extension}"
+        elif fname1.startswith("s3://scedc-pds"):
+            fname1 = fname1.split("|")[-1].split("/")[-1]  #
+            network1 = fname1[:2]
+            station1 = fname1[2:7].rstrip("_")
+            instrument1 = fname1[7:9]
+            component1 = fname1[9]
+            channel1 = f"{instrument1}{component1}"
+            location1 = fname1[10:12].rstrip("_")
+            year1 = fname1[13:17]
+            jday1 = fname1[17:20]
+            fname2 = fname2.split("|")[-1].split("/")[-1]
+            network2 = fname2[:2]
+            station2 = fname2[2:7].rstrip("_")
+            instrument2 = fname2[7:9]
+            component2 = fname2[9]
+            channel2 = f"{instrument2}{component2}"
+            location2 = fname2[10:12].rstrip("_")
+            year2 = fname2[13:17]
+            jday2 = fname2[17:20]
+            assert year1 == year2
+            assert jday1 == jday2
+            id1 = f"{network1}.{station1}.{location1}.{channel1[:-1]}"
+            id2 = f"{network2}.{station2}.{location2}.{channel2[:-1]}"
+            # fname_new = f"{year1}/{year1}.{jday1}.{extension}"
+        elif fname1.startswith("gs://cctorch"):
+            tmp1 = fname1.split("|")[-1].split("/")
+            year1, jday1 = tmp1[-3], tmp1[-2]
+            network1, station1, location1, channel1, _ = tmp1[-1].split(".")
+            tmp2 = fname2.split("|")[-1].split("/")
+            year2, jday2 = tmp2[-3], tmp2[-2]
+            network2, station2, location2, channel2, _ = tmp2[-1].split(".")
+            assert year1 == year2
+            assert jday1 == jday2
+            id1 = f"{network1}.{station1}.{location1}.{channel1[:-1]}"
+            id2 = f"{network2}.{station2}.{location2}.{channel2[:-1]}"
+            # fname_new = f"{year1}/{year1}.{jday1}.{extension}"
+        else:
+            id1, id2 = meta["pair_index"][i]
+        data = np.squeeze(np.nan_to_num(xcorr[i, :, :, :]))
+        zarr.create_array(fp, name=f"{id1}/{id2}", data=data, overwrite=True)
 
-            data = np.squeeze(np.nan_to_num(xcorr[i, :, :, :]))
-            if fname_new is None:
-                id1, id2 = meta["pair_index"][i]
+        ## save to numpy
+        # if not os.path.exists(f"{result_path}/{id1}"):
+        #     os.makedirs(f"{result_path}/{id1}", exist_ok=True)
+        # np.save(f"{result_path}/{id1}/{id2}.npy", data)
 
-            if f"{id1}/{id2}" not in fp:
-                gp = fp.create_group(f"{id1}/{id2}")
-                ds = gp.create_dataset("xcorr", data=data)
-                ds.attrs["count"] = 1
-            else:
-                gp = fp[f"{id1}/{id2}"]
-                ds = gp["xcorr"]
-                count = ds.attrs["count"]
-                ds[:] = count / (count + 1) * ds[:] + data / (count + 1)
-                ds.attrs["count"] = count + 1
+        ## save to hdf5
+        # if f"{id1}/{id2}" not in fp:
+        #     gp = fp.create_group(f"{id1}/{id2}")
+        #     ds = gp.create_dataset("xcorr", data=data)
+        #     ds.attrs["count"] = 1
+        # else:
+        #     gp = fp[f"{id1}/{id2}"]
+        #     ds = gp["xcorr"]
+        #     count = ds.attrs["count"]
+        #     ds[:] = count / (count + 1) * ds[:] + data / (count + 1)
+        #     ds.attrs["count"] = count + 1
+
+        return
 
 
 def write_xcor_data_to_h5(result, path_result, phase1="P", phase2="P"):

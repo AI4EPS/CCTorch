@@ -1,16 +1,20 @@
 import json
 import logging
+import multiprocessing
 import os
 import threading
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    wait,
+)
 from dataclasses import dataclass
 
-import h5py
-import matplotlib.pyplot as plt
 import pandas as pd
 import torch
-import torch.distributed as dist
 import torchvision.transforms as T
+import zarr
 from sklearn.cluster import DBSCAN
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -121,6 +125,11 @@ def get_args_parser(add_help=True):
     # distributed training parameters
     parser.add_argument("--world-size", default=1, type=int, help="number of distributed processes")
     parser.add_argument("--dist-url", default="env://", type=str, help="url used to set up distributed training")
+
+    # cloud
+    parser.add_argument("--protocol", default="file", type=str, help="protocol")
+    parser.add_argument("--token", default="application_default_credentials.json", type=str, help="token file")
+
     return parser
 
 
@@ -560,36 +569,47 @@ def main(args):
         events_df.to_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{world_size:03d}_event.csv"), index=False)
 
     if args.mode == "AN":
-        MAX_THREADS = 16
+        MAX_THREADS = min(128, os.cpu_count() * 4)
+        print(f"Writing to {args.result_path}/{args.result_file} with {MAX_THREADS} threads")
 
-        ## TODO: better logic to write CC results
-        # with h5py.File(os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.h5"), "w") as fp:
-        with h5py.File(os.path.join(args.result_path, args.result_file), "w") as fp:
-            with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
-                futures = set()
-                lock = threading.Lock()
+        # with h5py.File(os.path.join(args.result_path, args.result_file), "w") as fp:
+        # fp = zarr.storage.LocalStore(os.path.join(args.result_path, args.result_file))
+        fp = zarr.storage.FsspecStore.from_url(
+            f"{args.result_path}/{args.result_file}", read_only=False, storage_options={"token": args.token}
+        )
 
-                for data in tqdm(dataloader, position=rank, desc=f"{args.mode}: {rank}/{world_size}"):
-                    result = ccmodel(data)
+        # with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+        with ProcessPoolExecutor(max_workers=MAX_THREADS) as executor:
 
-                    future = executor.submit(
-                        write_ambient_noise, [result], fp, ccconfig, args.result_path, args.result_file, lock
-                    )
-                    futures.add(future)
+            futures = set()
+            # lock = threading.Lock()
+            lock = multiprocessing.Lock()
 
-                    if len(futures) >= MAX_THREADS:
-                        done, futures = wait(futures, return_when=FIRST_COMPLETED)
-                        for completed in done:
-                            try:
-                                completed.result()
-                            except Exception as e:
-                                logging.error(f"Error writing result: {e}")
+            for data in tqdm(dataloader, position=rank, desc=f"{args.mode}: {rank}/{world_size}"):
+                result = ccmodel(data)
 
-                for future in futures:
-                    try:
-                        future.result()
-                    except Exception as e:
-                        logging.error(f"Error writing result: {e}")
+                future = executor.submit(
+                    write_ambient_noise, result, fp, None, args.result_path, args.result_file, None
+                )
+                futures.add(future)
+
+                if len(futures) >= MAX_THREADS:
+                    done, futures = wait(futures, return_when=FIRST_COMPLETED)
+                    for completed in done:
+                        try:
+                            out = completed.result()
+                            if out:
+                                print(out)
+                        except Exception as e:
+                            logging.error(f"Error writing result: {e}")
+
+            for future in futures:
+                try:
+                    out = future.result()
+                    if out:
+                        print(out)
+                except Exception as e:
+                    logging.error(f"Error writing result: {e}")
 
 
 if __name__ == "__main__":

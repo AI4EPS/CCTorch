@@ -1,9 +1,9 @@
 # %%
 import os
-from args import parse_args
-import pandas as pd
+
 import fsspec
-import os
+import pandas as pd
+from args import parse_args
 
 args = parse_args()
 
@@ -39,8 +39,10 @@ if __name__ == "__main__":
         print(cmd)
         os.system(cmd)
 
-        cmd = f"python /opt/CCTorch/run.py --pair_list=pairs2_{year}_{jday}.txt --data_list1=mseeds2_{year}_{jday}.txt --data_format1=mseed --sampling_rate=20 --mode=AN --maxlag 300  --block_size1 300 --block_size2 300 --batch_size 1  --domain stft --device=cuda"
-        cmd += f" --result_path={result_path} --result_file={year}/{year}.{jday}.h5"
+        cmd = f"python /opt/CCTorch/run.py --pair_list=pairs2_{year}_{jday}.txt --data_list1=mseeds2_{year}_{jday}.txt --data_format1=mseed --sampling_rate=20 --mode=AN --maxlag 300  --block_size1 300 --block_size2 300 --batch_size 4  --domain stft --device=cuda"
+        # cmd += f" --result_path={result_path} --result_file={year}/{year}.{jday}.h5"
+        cmd += f" --result_path={result_path} --result_file={year}/{year}.{jday}.zarr"
+        # cmd += f" --result_path={result_path}/{year}/{year}.{jday}"
         # cmd = f"python ../../run.py --pair_list=pairs2_{year}_{jday}.txt --data_list1=mseeds2_{year}_{jday}.txt --data_format1=mseed --sampling_rate=20 --mode=AN  --block_size1 10 --block_size2 10 --batch_size 1  --domain stft --device=cpu"
         print(cmd)
         os.system(cmd)

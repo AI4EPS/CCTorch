@@ -18,6 +18,7 @@ from torch.utils.data import Dataset, IterableDataset
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
+import os
 
 
 class CCDataset(Dataset):
@@ -315,7 +316,8 @@ class CCIterableDataset(IterableDataset):
 
     def sample(self, block_index):
         if self.cache:
-            executor = ThreadPoolExecutor(max_workers=16)
+            ncpu = min(16, os.cpu_count())
+            executor = ThreadPoolExecutor(max_workers=ncpu)
             next_dict = {}
 
         for l, (i, j) in enumerate(block_index):

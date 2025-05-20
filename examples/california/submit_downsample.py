@@ -5,10 +5,10 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import fsspec
-import sky
-from tqdm import tqdm
 import pandas as pd
+import sky
 from args import parse_args
+from tqdm import tqdm
 
 ###### Hardcoded #######
 token_json = f"{os.environ['HOME']}/.config/gcloud/application_default_credentials.json"
@@ -77,11 +77,10 @@ except Exception as e:
 job_idx = 1
 requests_ids = []
 for NODE_RANK in range(NUM_NODES):
-    # for NODE_RANK in range(2):
     # for NODE_RANK in range(30):
 
     task.update_envs({"NODE_RANK": NODE_RANK})
-    cluster_name = f"downsample{NODE_RANK:03d}"
+    cluster_name = f"downsample-{NODE_RANK:03d}"
 
     requests_ids.append(sky.jobs.launch(task, name=f"{cluster_name}"))
 
