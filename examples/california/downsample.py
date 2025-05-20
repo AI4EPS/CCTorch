@@ -1,13 +1,14 @@
+import datetime
+import logging
+import os
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+
 import fsspec
 import numpy as np
 import obspy
-import logging
-import os
-from args import parse_args
 import pandas as pd
-from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
+from args import parse_args
 from tqdm import tqdm
-import datetime
 
 
 def downsample_mseed(fname, highpass_filter=False, sampling_rate=20, root_path="./", config=None):
@@ -102,7 +103,7 @@ def downsample_mseed(fname, highpass_filter=False, sampling_rate=20, root_path="
         fname = f"{network}.{station}.{location}.{channel}.mseed"
         mseed_dir = f"{waveforms_dir}/{network}/{year:04d}/{jday:03d}"
         if not os.path.exists(mseed_dir):
-            os.makedirs(mseed_dir)
+            os.makedirs(mseed_dir, exist_ok=True)
         tr.write(f"{root_path}/{mseed_dir}/{fname}", format="MSEED")
         if protocol != "file":
             # print(f"Uploading {fname} to {bucket}/{mseed_dir}/{fname}")

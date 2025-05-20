@@ -214,10 +214,14 @@ sid2idx = {sid: idx for sid, idx in zip(pairs_sid, pairs_idx)}
 
 
 # %%
-store = zarr.storage.FsspecStore.from_url(
-    f"gs://cctorch/ambient_noise/ccf/{year}/{year}.{jday}.zarr", read_only=True, storage_options={"anon": True}
-)
-ccf = zarr.open_group(store=store, mode="r")
+empty_ccf = False
+try:
+    store = zarr.storage.FsspecStore.from_url(
+        f"gs://cctorch/ambient_noise/ccf/{year}/{year}.{jday}.zarr", read_only=True, storage_options={"anon": True}
+    )
+    ccf = zarr.open_group(store=store, mode="r")
+except Exception as e:
+    empty_ccf = True
 
 
 def scan_ccf(s1):
@@ -225,12 +229,12 @@ def scan_ccf(s1):
 
 
 pairs_ccf = []
-with ThreadPoolExecutor(max_workers=mp.cpu_count()) as executor:
-    ccf_keys = list(ccf.keys())
-    futures = [executor.submit(scan_ccf, s1) for s1 in ccf_keys]
-    for future in tqdm(futures, total=len(ccf_keys)):
-        pairs_ccf.extend(future.result())
-
+if not empty_ccf:
+    with ThreadPoolExecutor(max_workers=mp.cpu_count() * 2) as executor:
+        ccf_keys = list(ccf.keys())
+        futures = [executor.submit(scan_ccf, s1) for s1 in ccf_keys]
+        for future in tqdm(futures, total=len(ccf_keys)):
+            pairs_ccf.extend(future.result())
 
 print(f"Total pairs: {len(pairs_sid)}")
 print(f"Processed pairs: {len(pairs_ccf)}")

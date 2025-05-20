@@ -4,6 +4,7 @@ import json
 import math
 import multiprocessing as mp
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -271,12 +272,15 @@ def write_ambient_noise(meta, fp, ccconfig, result_path, result_file, lock=nullc
     """
 
     xcorr = meta["xcorr"].cpu().numpy()
+    fname_list1 = meta["info1"]["file_name"]
+    fname_list2 = meta["info2"]["file_name"]
+    xcorr = np.nan_to_num(xcorr)
     nb, nch, nx, nt = xcorr.shape
-    for i in range(nb):
 
-        ## FIXME: HARDCODE
-        fname1 = meta["info1"]["file_name"][i]
-        fname2 = meta["info2"]["file_name"][i]
+    def process_batch(i):
+        fname1 = fname_list1[i]
+        fname2 = fname_list2[i]
+
         if fname1.startswith("s3://ncedc-pds"):
             station1, network1, channel1, location1, D1, year1, jday1 = fname1.split("|")[-1].split("/")[-1].split(".")
             station2, network2, channel2, location2, D2, year2, jday2 = fname2.split("|")[-1].split("/")[-1].split(".")
@@ -323,8 +327,17 @@ def write_ambient_noise(meta, fp, ccconfig, result_path, result_file, lock=nullc
             # fname_new = f"{year1}/{year1}.{jday1}.{extension}"
         else:
             id1, id2 = meta["pair_index"][i]
-        data = np.squeeze(np.nan_to_num(xcorr[i, :, :, :]))
+        data = np.squeeze(xcorr[i, :, :, :])
         zarr.create_array(fp, name=f"{id1}/{id2}", data=data, overwrite=True)
+        return f"{id1}/{id2}"
+
+    with ThreadPoolExecutor(max_workers=(nb)) as executor:
+        futures = [executor.submit(process_batch, i) for i in range(nb)]
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                print(f"Error processing batch: {e}")
 
         ## save to numpy
         # if not os.path.exists(f"{result_path}/{id1}"):
@@ -343,7 +356,7 @@ def write_ambient_noise(meta, fp, ccconfig, result_path, result_file, lock=nullc
         #     ds[:] = count / (count + 1) * ds[:] + data / (count + 1)
         #     ds.attrs["count"] = count + 1
 
-        return
+    return
 
 
 def write_xcor_data_to_h5(result, path_result, phase1="P", phase2="P"):
