@@ -239,8 +239,9 @@ if not empty_ccf:
 print(f"Total pairs: {len(pairs_sid)}")
 print(f"Processed pairs: {len(pairs_ccf)}")
 
+# pairs_idx = [sid2idx[pair] for pair in pairs_sid if pair not in pairs_ccf]
 pairs_sid = set(pairs_sid) - set(pairs_ccf)
-pairs_sid = list(pairs_sid)
+pairs_sid = sorted(list(pairs_sid))
 pairs_idx = [sid2idx[sid] for sid in pairs_sid]
 print(f"Remaining pairs: {len(pairs_idx)}")
 
