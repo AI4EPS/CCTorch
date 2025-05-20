@@ -574,9 +574,12 @@ def main(args):
 
         # with h5py.File(os.path.join(args.result_path, args.result_file), "w") as fp:
         # fp = zarr.storage.LocalStore(os.path.join(args.result_path, args.result_file))
-        fp = zarr.storage.FsspecStore.from_url(
-            f"{args.result_path}/{args.result_file}", read_only=False, storage_options={"token": args.token}
-        )
+        if args.result_path.startswith("s3://") or args.result_path.startswith("gs://"):
+            fp = zarr.storage.FsspecStore.from_url(
+                f"{args.result_path}/{args.result_file}", read_only=False, storage_options={"token": args.token}
+            )
+        else:
+            fp = zarr.storage.LocalStore(os.path.join(args.result_path, args.result_file))
 
         # with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
         with ProcessPoolExecutor(max_workers=MAX_THREADS) as executor:

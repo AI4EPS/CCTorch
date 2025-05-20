@@ -1,13 +1,15 @@
 # %%
+import multiprocessing as mp
+from concurrent.futures import ThreadPoolExecutor
+
 import fsspec
-import pandas as pd
-from tqdm import tqdm
-from sklearn.neighbors import BallTree, NearestNeighbors
 import numpy as np
-from pyproj import Proj
-
+import pandas as pd
+import zarr
 from args import parse_args
-
+from pyproj import Proj
+from sklearn.neighbors import BallTree, NearestNeighbors
+from tqdm import tqdm
 
 args = parse_args()
 year = f"{args.year:04d}"
@@ -203,11 +205,50 @@ mseeds = mseeds.sort_values(["year", "jday", "network", "station"])
 distances, indices = get_neighbors_within_radius(mseeds, radius_km=knn_dist)
 
 # %%
+mseeds["station_id"] = (
+    mseeds["network"] + "." + mseeds["station"] + "." + mseeds["location"] + "." + mseeds["instrument"]
+)
+pairs_idx = [(i, j) for i in range(len(indices)) for j in indices[i] if i <= j]
+pairs_sid = [(mseeds.iloc[i].station_id, mseeds.iloc[j].station_id) for i, j in pairs_idx]
+sid2idx = {sid: idx for sid, idx in zip(pairs_sid, pairs_idx)}
+
+
+# %%
+store = zarr.storage.FsspecStore.from_url(
+    f"gs://cctorch/ambient_noise/ccf/{year}/{year}.{jday}.zarr", read_only=True, storage_options={"anon": True}
+)
+ccf = zarr.open_group(store=store, mode="r")
+
+
+def scan_ccf(s1):
+    return [(s1, s2) for s2 in ccf[s1].keys()]
+
+
+pairs_ccf = []
+with ThreadPoolExecutor(max_workers=mp.cpu_count()) as executor:
+    ccf_keys = list(ccf.keys())
+    futures = [executor.submit(scan_ccf, s1) for s1 in ccf_keys]
+    for future in tqdm(futures, total=len(ccf_keys)):
+        pairs_ccf.extend(future.result())
+
+
+print(f"Total pairs: {len(pairs_sid)}")
+print(f"Processed pairs: {len(pairs_ccf)}")
+
+pairs_sid = set(pairs_sid) - set(pairs_ccf)
+pairs_sid = list(pairs_sid)
+pairs_idx = [sid2idx[sid] for sid in pairs_sid]
+print(f"Remaining pairs: {len(pairs_idx)}")
+
+
+# %%
 mseeds["file_name"].to_csv(f"mseeds2_{year}_{jday}.txt", index=False, header=True)
 
 # %%
+# with open(f"pairs2_{year}_{jday}.txt", "w") as f:
+#     f.writelines(f"{i},{j}\n" for i in range(len(indices)) for j in indices[i] if i <= j)
 with open(f"pairs2_{year}_{jday}.txt", "w") as f:
-    f.writelines(f"{i},{j}\n" for i in range(len(indices)) for j in indices[i] if i <= j)
+    f.writelines(f"{i},{j}\n" for i, j in pairs_idx)
 
 # %%
 fs = fsspec.filesystem(protocol, token=token_file)
