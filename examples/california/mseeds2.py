@@ -66,14 +66,14 @@ sid2idx = {sid: idx for sid, idx in zip(pairs_sid, pairs_idx)}
 
 
 # %%
-empty_ccf = False
+ccf = None
 try:
     store = zarr.storage.FsspecStore.from_url(
         f"gs://cctorch/ambient_noise/ccf/{year}/{year}.{jday}.zarr", read_only=True, storage_options={"anon": True}
     )
     ccf = zarr.open_group(store=store, mode="r")
 except Exception as e:
-    empty_ccf = True
+    print(f"Error opening ccf: {e}")
 
 
 def scan_ccf(s1):
@@ -81,11 +81,11 @@ def scan_ccf(s1):
 
 
 pairs_ccf = []
-if not empty_ccf:
+if ccf is not None:
     with ThreadPoolExecutor(max_workers=mp.cpu_count() * 2) as executor:
         ccf_keys = list(ccf.keys())
         futures = [executor.submit(scan_ccf, s1) for s1 in ccf_keys]
-        for future in tqdm(futures, total=len(ccf_keys)):
+        for future in tqdm(futures, total=len(ccf_keys), desc="Scanning ccf"):
             pairs_ccf.extend(future.result())
 
 print(f"Total pairs: {len(pairs_sid)}")

@@ -569,42 +569,53 @@ def main(args):
         events_df.to_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{world_size:03d}_event.csv"), index=False)
 
     if args.mode == "AN":
-        MAX_THREADS = min(128, os.cpu_count() * 4)
+        MAX_THREADS = min(64, os.cpu_count() * 2)
         print(f"Writing to {args.result_path}/{args.result_file} with {MAX_THREADS} threads")
 
         # with h5py.File(os.path.join(args.result_path, args.result_file), "w") as fp:
-        # fp = zarr.storage.LocalStore(os.path.join(args.result_path, args.result_file))
-        if args.result_path.startswith("s3://") or args.result_path.startswith("gs://"):
-            fp = zarr.storage.FsspecStore.from_url(
-                f"{args.result_path}/{args.result_file}", read_only=False, storage_options={"token": args.token}
-            )
-        else:
-            fp = zarr.storage.LocalStore(os.path.join(args.result_path, args.result_file))
 
-        # with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
         with ProcessPoolExecutor(max_workers=MAX_THREADS) as executor:
 
             futures = set()
-            # lock = threading.Lock()
             lock = multiprocessing.Lock()
+            results = []
+            cache_size = 16
 
             for data in tqdm(dataloader, position=rank, desc=f"{args.mode}: {rank}/{world_size}"):
                 result = ccmodel(data)
+                results.append(result)
 
+                if len(results) >= cache_size:
+                    future = executor.submit(
+                        write_ambient_noise,
+                        results,
+                        args.result_path,
+                        args.result_file,
+                        storage_options={"token": args.token},
+                    )
+                    futures.add(future)
+                    results = []
+
+                    if len(futures) >= MAX_THREADS:
+                        done, futures = wait(futures, return_when=FIRST_COMPLETED)
+                        for completed in done:
+                            try:
+                                out = completed.result()
+                                if out:
+                                    print(out)
+                            except Exception as e:
+                                logging.error(f"Error writing result: {e}")
+
+            if len(results) > 0:
                 future = executor.submit(
-                    write_ambient_noise, result, fp, None, args.result_path, args.result_file, None
+                    write_ambient_noise,
+                    results,
+                    args.result_path,
+                    args.result_file,
+                    storage_options={"token": args.token},
                 )
                 futures.add(future)
-
-                if len(futures) >= MAX_THREADS:
-                    done, futures = wait(futures, return_when=FIRST_COMPLETED)
-                    for completed in done:
-                        try:
-                            out = completed.result()
-                            if out:
-                                print(out)
-                        except Exception as e:
-                            logging.error(f"Error writing result: {e}")
+                results = []
 
             for future in futures:
                 try:
