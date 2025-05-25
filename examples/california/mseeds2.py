@@ -54,6 +54,7 @@ print(f"After grouping: {len(mseeds) = }")
 mseeds = mseeds.sort_values(["year", "jday", "network", "station"])
 
 # %%
+print(f"Getting neighbors within {knn_dist} km")
 distances, indices = get_neighbors_within_radius(mseeds, radius_km=knn_dist)
 
 # %%
@@ -82,7 +83,7 @@ def scan_ccf(s1):
 
 pairs_ccf = []
 if ccf is not None:
-    with ThreadPoolExecutor(max_workers=mp.cpu_count() * 2) as executor:
+    with ThreadPoolExecutor(max_workers=mp.cpu_count() * 4) as executor:
         ccf_keys = list(ccf.keys())
         futures = [executor.submit(scan_ccf, s1) for s1 in ccf_keys]
         for future in tqdm(futures, total=len(ccf_keys), desc="Scanning ccf"):
