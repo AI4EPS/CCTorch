@@ -197,6 +197,7 @@ def main(args):
         # filtering
         min_cc = 0.5
         max_shift = {"P": int(0.5 * fs), "S": int(0.85 * fs)}
+        max_dt = {"P": 3.0, "S": 3.0 * 1.73}
         max_obs = 100
         min_obs = 8
 
@@ -438,6 +439,7 @@ def main(args):
                 result_df = result_df[
                     (result_df["cc"] >= ccconfig.min_cc)
                     & (result_df["shift"].abs() <= result_df["phase_type"].map(ccconfig.max_shift))
+                    & (result_df["dt"].abs() <= result_df["phase_type"].map(ccconfig.max_dt))
                 ]
 
                 # %% merge different instrument types of the same stations
