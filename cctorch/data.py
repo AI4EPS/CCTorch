@@ -205,7 +205,7 @@ class CCIterableDataset(IterableDataset):
         self.block_index, self.num_batch = self.count_blocks(blocks)
 
         print(
-            f"pair_matrix: {self.pair_matrix.shape}, blocks: {len(self.block_index)}, block_size: {self.block_size1} x {self.block_size2}"
+            f"pair_matrix: {self.pair_matrix.shape}, blocks: {len(self.block_index)} x {world_size}, block_size: {self.block_size1} x {self.block_size2}"
         )
 
         if (self.data_format1 == "memmap") or (self.data_format2 == "memmap"):
