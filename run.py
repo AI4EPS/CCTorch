@@ -458,6 +458,7 @@ def main(args):
                         lambda x: (x.nlargest(ccconfig.max_obs, "weight") if len(x) >= ccconfig.min_obs else None),
                         include_groups=False,
                     )
+                    .droplevel(-1)
                     .reset_index()
                 )
 
