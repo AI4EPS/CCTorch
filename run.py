@@ -454,8 +454,11 @@ def main(args):
                 # %% filter based on cc observations
                 result_df = (
                     result_df.groupby(["idx_eve1", "idx_eve2"])
-                    .apply(lambda x: (x.nlargest(ccconfig.max_obs, "weight") if len(x) >= ccconfig.min_obs else None))
-                    .reset_index(drop=True)
+                    .apply(
+                        lambda x: (x.nlargest(ccconfig.max_obs, "weight") if len(x) >= ccconfig.min_obs else None),
+                        include_groups=False,
+                    )
+                    .reset_index()
                 )
 
                 # %%

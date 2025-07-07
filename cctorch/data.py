@@ -201,7 +201,9 @@ class CCIterableDataset(IterableDataset):
         self.group1 = [list(x) for x in np.array_split(unique_row, block_num1) if len(x) > 0]
         self.group2 = [list(x) for x in np.array_split(unique_col, block_num2) if len(x) > 0]
 
-        blocks = list(itertools.product(range(len(self.group1)), range(len(self.group2))))[rank::world_size]
+        blocks = list(itertools.product(range(len(self.group1)), range(len(self.group2))))
+        blocks = self.filter_blocks(blocks)
+        blocks = blocks[rank::world_size]
         self.block_index, self.num_batch = self.count_blocks(blocks)
 
         print(
@@ -262,6 +264,16 @@ class CCIterableDataset(IterableDataset):
         col_index = col_index.tocsr()
 
         return pair_matrix, row_index, col_index, unique_row, unique_col
+
+    def filter_blocks(self, blocks):
+        block_size = {}
+        for i, j in tqdm(blocks, desc="Filtering blocks"):
+            index1, index2 = self.group1[i], self.group2[j]
+            count = (self.pair_matrix[index1, :][:, index2]).sum()
+            if count > 0:
+                block_size[(i, j)] = count
+        block_size = sorted(block_size.items(), key=lambda x: x[1], reverse=True)
+        return [x[0] for x in block_size]
 
     def count_blocks(self, blocks):
         num_batch = 0
