@@ -17,7 +17,7 @@ if __name__ == "__main__":
     token_file = args.token_file
 
     # get how many days in the year
-    jdays = pd.date_range(start=f"{year}-01-01", end=f"{year}-12-31").strftime("%j").tolist()
+    jdays = pd.date_range(start=f"{year}-10-12", end=f"{year}-12-31").strftime("%j").tolist()
 
     jdays = jdays[node_rank::num_nodes]
     print(f"{jdays = }")
@@ -26,11 +26,11 @@ if __name__ == "__main__":
 
     for jday in jdays:
 
-        cmd = f"python mseeds1.py --year {year} --jday {jday}"
+        cmd = f"python mseeds1.py --year {year} --jday {jday} --protocol {protocol} --token_file {token_file} --bucket {args.bucket}"
         print(cmd)
         os.system(cmd)
 
-        cmd = f"python downsample.py --year {year} --jday {jday}"
+        cmd = f"python downsample.py --year {year} --jday {jday} --protocol {protocol} --token_file {token_file} --bucket {args.bucket}"
         print(cmd)
         os.system(cmd)
 

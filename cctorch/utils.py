@@ -24,6 +24,13 @@ import torch
 import zarr
 from tqdm.auto import tqdm
 
+import logging
+import fsspec
+from obspy import read_inventory
+from obspy.core import UTCDateTime
+import scipy.fft as sf
+from scipy.fft import next_fast_len
+
 
 # %%
 def write_results(results, result_path, ccconfig, rank=0, world_size=1):
@@ -488,6 +495,227 @@ def write_h5(fn, dataset_name, data, attrs_dict):
         for key, val in attrs_dict.items():
             fid[dataset_name].attrs.modify(key, val)
 
+
+def get_instrument_resp(network, station):
+    fs_s3 = fsspec.filesystem('s3')
+    file_instru_resp = f"s3://ncedc-pds/FDSNstationXML/{network}/{network}.{station}.xml"
+    try:
+        with fs_s3.open(file_instru_resp, "rb") as f:
+            return read_inventory(f)
+    except:
+        if network in ["CI", "ZY"]:
+            network_folder = "CI"
+        else:
+            network_folder = "unauthoritative-XML"
+        file_instru_resp = f"s3://scedc-pds/FDSNstationXML/{network_folder}/{network}_{station}.xml"
+        with fs_s3.open(file_instru_resp, "rb") as f:
+            return read_inventory(f)
+
+def get_nc_info(fname):
+    file = fname.split('/')[-1]
+    network = file.split(".")[1]
+    station = file.split(".")[0]
+    channel = file.split(".")[2]
+    location = file.split(".")[3]
+    year = file.split(".")[-2]
+    jday = file.split(".")[-1]
+    date_target = obspy.UTCDateTime(year=int(year), julday=int(jday))
+    channel_id = f"{network}.{station}.{location}.{channel}"
+    return network, station, channel_id, date_target
+
+def get_sc_info(fname):
+    file = fname.split('/')[-1]
+    network = file[:2]
+    station = file[2:7].strip("_")
+    channel = file[7:10]
+    year, jday = int(file[-10:-6]), int(file[-6:-3])
+    date_target = obspy.UTCDateTime(year=year, julday=jday)
+    channel_id = f"{network}.{station}..{channel}"
+    return network, station, channel_id, date_target
+
+def get_instrument_response(fname):
+    print(f"Finding instrument response for {fname}...")
+    if fname.startswith("s3://ncedc-pds"):
+        network, station, channel_id, date_target = get_nc_info(fname)   
+    elif fname.startswith("s3://scedc-pds"):
+        network, station, channel_id, date_target = get_sc_info(fname)
+    else:
+        raise ValueError(f"Unsupported file format: {fname}")
+    return get_instrument_resp(network, station), channel_id, date_target
+
+def from_inv_to_pd(inv, channel_id, date_target):
+    channels = []
+    for net in inv.networks:
+        for sta in net.stations:
+            for cha in sta.channels:
+                try:
+                    seed_id = "%s.%s.%s.%s" % (net.code, sta.code,
+                                                cha.location_code,
+                                                cha.code)
+                    resp = inv.get_response(seed_id, cha.start_date+10)
+                    polezerostage = resp.get_paz()
+                    totalsensitivity = resp.instrument_sensitivity
+                    pzdict = {}
+                    pzdict['poles'] = polezerostage.poles
+                    pzdict['zeros'] = polezerostage.zeros
+                    pzdict['gain'] = polezerostage.normalization_factor
+                    pzdict['sensitivity'] = totalsensitivity.value
+                    channels.append([seed_id, cha.start_date,
+                                        cha.end_date or UTCDateTime(),
+                                        pzdict, cha.latitude,
+                                        cha.longitude])
+                except:
+                    continue
+    channels = pd.DataFrame(channels, columns=["channel_id", "start_date",
+                                               "end_date", "paz", "latitude",
+                                               "longitude"],)
+    channels = channels[channels["channel_id"] == channel_id]
+    if len(channels) > 1:
+        channels = channels[channels["start_date"] <= date_target]
+    if len(channels) > 1:
+        channels = channels[channels["end_date"] >= date_target]
+    elif len(channels) == 0:
+        raise ValueError(f"No channel found for {channel_id} at {date_target}")
+    return channels
+
+def get_response_paz(fname):
+    inv, channel_id, date_target = get_instrument_response(fname)
+    response = from_inv_to_pd(inv, channel_id, date_target)
+    return response["paz"].values[0]
+
+def check_and_phase_shift(trace, taper_length=20.0):
+    # TODO replace this hard coded taper length
+    if trace.stats.npts < 4 * taper_length*trace.stats.sampling_rate:
+        trace.data = np.zeros(trace.stats.npts)
+        return trace
+
+    dt = np.mod(trace.stats.starttime.datetime.microsecond*1.0e-6,
+                trace.stats.delta)
+    if (trace.stats.delta - dt) <= np.finfo(float).eps:
+        dt = 0.
+    if dt != 0.:
+        if dt <= (trace.stats.delta / 2.):
+            dt = -dt
+        else:
+            dt = (trace.stats.delta - dt)
+        logging.debug("correcting time by %.6fs"%dt)
+        trace.detrend(type="demean")
+        trace.detrend(type="simple")
+        trace.taper(max_percentage=None, max_length=1.0)
+        n = next_fast_len(int(trace.stats.npts))
+        FFTdata = sf.fft(trace.data, n=n)
+        fftfreq = sf.fftfreq(n, d=trace.stats.delta)
+        FFTdata = FFTdata * np.exp(1j * 2. * np.pi * fftfreq * dt)
+        FFTdata = FFTdata.astype(np.complex64)
+        sf.ifft(FFTdata, n=n, overwrite_x=True)
+        trace.data = np.real(FFTdata[:len(trace.data)]).astype(np.float64)
+        trace.stats.starttime += dt
+        del FFTdata, fftfreq
+        return trace
+    else:
+        return trace
+
+def partial_hann_taper(length, taper_fraction=0.04, device="cpu"):
+        # print('Chris flag taper', length, taper_fraction)
+        n_taper = int(length * taper_fraction)
+        if n_taper == 0:
+            return torch.ones(length, device=device)
+
+        # Hann window for edges
+        x = torch.linspace(0, torch.pi / 2, n_taper, device=device)
+        taper_edge = torch.sin(x)**2   # sin² taper
+
+        taper_start = taper_edge
+        taper_end = taper_edge.flip(0)
+        taper_tail = torch.zeros(5, device=device)
+
+
+        # Build full window: start + flat + end
+        ones_middle = torch.ones(length - 2 * n_taper, device=device)
+        window = torch.cat([taper_start, ones_middle, taper_end, taper_tail], dim=0)
+        # window = torch.cat([taper_start, ones_middle, taper_end], dim=0)
+        return window
+
+def custom_demeaned_stft(data1, nlag, hop_length, window):
+    """
+    Custom STFT with per-window demeaning that matches torch.stft(..., center=False)
+
+    Args:
+        data1: (B, T) time-domain signal
+        nlag: for computing n_fft = 2 * nlag + 5
+        hop_length: step size between windows
+        window: (n_fft,) window function (e.g., Hann)
+
+    Returns:
+        Complex STFT of shape (B, freq_bins, time_frames), matching torch.stft
+    """
+    n_fft = 2 * nlag + 5
+    B, T = data1.shape
+
+    # Compute number of complete frames (no padding)
+    num_frames = (T - n_fft) // hop_length + 1
+
+    # Use unfold to extract frames
+    frames = data1.unfold(dimension=-1, size=n_fft, step=hop_length)  # (B, num_frames, n_fft)
+
+    # Demean each frame
+    frames = frames - frames.mean(dim=-1, keepdim=True)
+
+    # Apply window
+    window = window.to(data1.device)
+    frames = frames * window.view(1, 1, -1)
+
+    # Apply FFT
+    stft_result = torch.fft.rfft(frames, dim=-1)  # (B, num_frames, freq_bins)
+
+    # Transpose to match torch.stft output: (B, freq_bins, time_frames)
+    stft_result = stft_result.transpose(-1, -2)
+
+    return stft_result  # shape: (B, freq_bins, time_frames)
+
+def cosine_taper_4freq(n_freqs, low, high, sample_rate=20):
+    """
+    Create a 1D cosine taper with flat region between left_end and right_start,
+    and cosine transitions on both sides.
+
+    Parameters:
+    - n_freqs: total number of frequency bins
+    - left_start, left_end, right_start, right_end: index positions in frequency domain
+
+    Returns:
+    - taper: tensor of shape [n_freqs]
+    """
+    delta_f = sample_rate / ((n_freqs - 1)*2 + 1)
+    low_idx = math.ceil(low / delta_f)
+    high_idx = math.floor(high / delta_f)
+    low_left = low_idx - 100
+    if low_left < 0:
+        low_left = 0
+    high_right = high_idx + 100
+    if high_right > (n_freqs - 1)*2:
+        high_right = (n_freqs - 1)*2
+    print(f"Doing the classic Brutal Whiten {n_freqs} {low_left} {low_idx} {high_idx} {high_right}")
+    left_start = low_left
+    left_end = low_idx
+    right_start = high_idx
+    right_end = high_right
+
+    taper = np.zeros(n_freqs)
+
+    # Left cosine ramp
+    for i in range(left_start, left_end):
+        frac = (i - left_start) / (left_end - left_start)
+        taper[i] = 0.5 * (1 - np.cos(np.pi * frac))
+
+    # Flat part
+    taper[left_end:right_start] = 1.0
+
+    # Right cosine ramp
+    for i in range(right_start, right_end):
+        frac = (i - right_start) / (right_end - right_start)
+        taper[i] = 0.5 * (1 + np.cos(np.pi * frac))
+    cos_taper = torch.tensor(taper, dtype=torch.float32)
+    return cos_taper[None, :, None]
 
 # # %%
 # @dataclass

@@ -18,12 +18,13 @@ if __name__ == "__main__":
     result_path = args.result_path
 
     # get how many days in the year
-    jdays = pd.date_range(start=f"{year}-01-01", end=f"{year}-12-31").strftime("%j").tolist()
+    jdays = pd.date_range(start=f"{year}-11-18", end=f"{year}-11-27").strftime("%j").tolist()
 
     jdays = jdays[node_rank::num_nodes]
     print(f"{jdays = }")
 
     fs = fsspec.filesystem(protocol, token=token_file)
+    print('result_path = ', result_path)
 
     for jday in jdays:
 
@@ -35,7 +36,7 @@ if __name__ == "__main__":
         # print(cmd)
         # os.system(cmd)
 
-        cmd = f"python mseeds2.py --year {year} --jday {jday}"
+        cmd = f"python mseeds2.py --year {year} --jday {jday} --token_file {token_file}" 
         print(cmd)
         os.system(cmd)
 
@@ -44,7 +45,8 @@ if __name__ == "__main__":
                 print(f"pairs2_{year}_{jday}.txt is empty")
                 continue
 
-        cmd = f"python /opt/CCTorch/run.py --pair_list=pairs2_{year}_{jday}.txt --data_list1=mseeds2_{year}_{jday}.txt --data_format1=mseed --sampling_rate=20 --mode=AN --maxlag 300  --block_size1 300 --block_size2 300 --batch_size 4  --domain stft --device=cuda"
+        # cmd = f"python /opt/CCTorch/run.py --pair_list=pairs2_{year}_{jday}.txt --data_list1=mseeds2_{year}_{jday}.txt --data_format1=mseed --sampling_rate=20 --mode=AN --maxlag 300  --block_size1 300 --block_size2 300 --batch_size 4  --domain stft --device=cuda"
+        cmd = f"python ../../run.py --pair_list=pairs2_{year}_{jday}_MLR.txt --data_list1=mseeds2_{year}_{jday}.txt --data_format1=mseed --sampling_rate=20 --mode=AN --maxlag 300  --block_size1 300 --block_size2 300 --batch_size 4  --domain stft --device=cpu"
         # cmd += f" --result_path={result_path} --result_file={year}/{year}.{jday}.h5"
         cmd += f" --result_path={result_path} --result_file={year}/{year}.{jday}.zarr"
         # cmd += f" --result_path={result_path}/{year}/{year}.{jday}"
