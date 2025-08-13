@@ -18,13 +18,13 @@ if __name__ == "__main__":
     result_path = args.result_path
 
     # get how many days in the year
-    jdays = pd.date_range(start=f"{year}-11-18", end=f"{year}-11-27").strftime("%j").tolist()
+    jdays = pd.date_range(start=f"{year}-01-01", end=f"{year}-12-31").strftime("%j").tolist()
 
     jdays = jdays[node_rank::num_nodes]
     print(f"{jdays = }")
 
     fs = fsspec.filesystem(protocol, token=token_file)
-    print('result_path = ', result_path)
+
 
     for jday in jdays:
 
