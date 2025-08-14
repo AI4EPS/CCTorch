@@ -17,7 +17,7 @@ if __name__ == "__main__":
     token_file = args.token_file
 
     # get how many days in the year
-    jdays = pd.date_range(start=f"{year}-05-01", end=f"{year}-12-31").strftime("%j").tolist()
+    jdays = pd.date_range(start=f"{year}-01-01", end=f"{year}-12-31").strftime("%j").tolist()
 
     jdays = jdays[node_rank::num_nodes]
     print(f"{jdays = }")
