@@ -60,11 +60,11 @@ if len(processed) > 0:
     print(f"Before filtering: {len(processed)}")
     print(mseeds.head())
     print(processed.head())
-    mseeds = mseeds[
-        ~mseeds.set_index(["year", "jday", "network", "station"]).index.isin(
-            processed.set_index(["year", "jday", "network", "station"]).index
-        )
-    ]
+    # mseeds = mseeds[
+    #     ~mseeds.set_index(["year", "jday", "network", "station"]).index.isin(
+    #         processed.set_index(["year", "jday", "network", "station"]).index
+    #     )
+    # ]
     print(f"After filtering: {len(mseeds) = }")
     print(mseeds.head())
 

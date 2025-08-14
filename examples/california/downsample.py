@@ -10,6 +10,7 @@ import pandas as pd
 from args import parse_args
 from tqdm import tqdm
 
+from utils import get_response_paz, check_and_phase_shift
 
 def downsample_mseed(fname, highpass_filter=False, sampling_rate=20, root_path="./", config=None):
     """
@@ -28,67 +29,82 @@ def downsample_mseed(fname, highpass_filter=False, sampling_rate=20, root_path="
 
     fname_local = {}
     try:
-        stream = obspy.Stream()
+        streams = obspy.Stream()
+        datalesspz_lst = []
         for tmp in fname.split("|"):
+            try:
+                datalesspz = get_response_paz(tmp)
+            except:
+                datalesspz = None
             with fsspec.open(tmp, "rb", anon=True) as fp:
                 if tmp.endswith(".sac"):
                     meta = obspy.read(fp, format="SAC")
                 else:
                     meta = obspy.read(fp, format="MSEED")
-                stream += meta
+                for i in range(len(meta)):
+                    datalesspz_lst.append(datalesspz)
+                streams += meta
             fname_local[meta[0].stats.component] = tmp.split("/")[-1]
             # stream += obspy.read(tmp)
-        stream = stream.merge(fill_value="latest")
-        stream.detrend("demean")
+        # stream = stream.merge(fill_value="latest")
+        # stream.detrend("demean")
+        for i, trace in enumerate(streams):
+            trace_temp = check_and_phase_shift(trace, 0)
+            trace_temp.detrend("demean")
+            trace_temp.detrend("linear")
+            trace_temp.taper(max_percentage=None, max_length=0)
 
-        ## FIXME: HARDCODE for California
-        year, jday = None, None
-        if tmp.startswith("s3://ncedc-pds"):
-            year, jday = tmp.split("/")[-1].split(".")[-2:]
-            year, jday = int(year), int(jday)
-            begin_time = obspy.UTCDateTime(year=year, julday=jday)
-            end_time = begin_time + 86400  ## 1 day
-            stream = stream.trim(begin_time, end_time, pad=True, fill_value=0, nearest_sample=True)
-        elif tmp.startswith("s3://scedc-pds"):
-            year_jday = tmp.split("/")[-1].rstrip(".ms")[-7:]
-            year, jday = int(year_jday[:4]), int(year_jday[4:])
-            begin_time = obspy.UTCDateTime(year=year, julday=jday)
-            end_time = begin_time + 86400  ## 1 day
-            stream = stream.trim(begin_time, end_time, pad=True, fill_value=0, nearest_sample=True)
+            if len(trace_temp.data) < 10:
+                continue
+            trace_temp.filter("highpass", freq=0.001, zerophase=True, corners=4)
+            
+            if trace_temp.stats.sampling_rate != sampling_rate:
+                # logging.warning(f"Resampling {trace_temp.id} from {trace_temp.stats.sampling_rate} to {sampling_rate} Hz")
+                try:
+                    # print(f"Resample from {trace.stats.sampling_rate} to {sampling_rate} Hz")
+                    trace_temp.filter("lowpass", freq=9.8, zerophase=True, corners=8)
+                    trace_temp.data = np.array(trace_temp.data)
+                    trace_temp.interpolate(method="lanczos", sampling_rate=sampling_rate, a=1.0)
+                except Exception as e:
+                    print(f"Error resampling {trace.id}:\n{e}")
+
+            if datalesspz_lst[i]:
+                trace_temp.simulate(paz_remove=datalesspz_lst[i],
+                        remove_sensitivity=True,
+                        pre_filt=[0.001, 0.002, 9.8, 10],
+                        paz_simulate=None, )
+            else:
+                print(f"Warning: No response found for {trace_temp.id}, skipping instrument removal")
+                trace_temp.filter('bandpass', freqmin=0.002, freqmax=9.8, corners=2, zerophase=True)
+            streams[i] = trace_temp
+
+        streams.merge(fill_value=None)
+
+        # ## FIXME: HARDCODE for California
+        # year, jday = None, None
+        # if tmp.startswith("s3://ncedc-pds"):
+        #     year, jday = tmp.split("/")[-1].split(".")[-2:]
+        #     year, jday = int(year), int(jday)
+        #     begin_time = obspy.UTCDateTime(year=year, julday=jday)
+        #     end_time = begin_time + 86400  ## 1 day
+        #     stream = stream.trim(begin_time, end_time, pad=True, fill_value=0, nearest_sample=True)
+        # elif tmp.startswith("s3://scedc-pds"):
+        #     year_jday = tmp.split("/")[-1].rstrip(".ms")[-7:]
+        #     year, jday = int(year_jday[:4]), int(year_jday[4:])
+        #     begin_time = obspy.UTCDateTime(year=year, julday=jday)
+        #     end_time = begin_time + 86400  ## 1 day
+        #     stream = stream.trim(begin_time, end_time, pad=True, fill_value=0, nearest_sample=True)
     except Exception as e:
         print(f"Error reading {fname}:\n{e}")
         return None
 
-    tmp_stream = obspy.Stream()
-    for trace in stream:
-        if len(trace.data) < 10:
-            continue
-
-        ## interpolate to 100 Hz
-        if trace.stats.sampling_rate != sampling_rate:
-            # logging.warning(f"Resampling {trace.id} from {trace.stats.sampling_rate} to {sampling_rate} Hz")
-            try:
-                trace.filter("lowpass", freq=0.45 * sampling_rate, zerophase=True, corners=8)
-                trace.interpolate(method="lanczos", sampling_rate=sampling_rate, a=1.0)
-                if tmp.startswith(("s3://ncedc-pds", "s3://scedc-pds")):
-                    trace = trace.trim(begin_time, end_time, pad=True, fill_value=0, nearest_sample=True)
-            except Exception as e:
-                print(f"Error resampling {trace.id}:\n{e}")
-
-        tmp_stream.append(trace)
-
-    if len(tmp_stream) == 0:
+    if len(streams) == 0:
         return None
-    stream = tmp_stream
 
-    begin_time = min([st.stats.starttime for st in stream])
-    end_time = max([st.stats.endtime for st in stream])
-    stream = stream.trim(begin_time, end_time, pad=True, fill_value=0)
-
-    for tr in stream:
-        tr.data = tr.data.astype(np.float32)
-        starttime = tr.stats.starttime
-        endtime = tr.stats.endtime
+    for stream in streams:
+        stream.data = stream.data.astype(np.float32)
+        starttime = stream.stats.starttime
+        endtime = stream.stats.endtime
         midtime = starttime + (endtime - starttime) / 2
         year = midtime.year
         jday = midtime.julday
@@ -96,15 +112,16 @@ def downsample_mseed(fname, highpass_filter=False, sampling_rate=20, root_path="
         #     year = starttime.year
         # if jday is None:
         #     jday = starttime.julday
-        network = tr.stats.network
-        station = tr.stats.station
-        location = tr.stats.location
-        channel = tr.stats.channel
+        network = stream.stats.network
+        station = stream.stats.station
+        location = stream.stats.location
+        channel = stream.stats.channel
         fname = f"{network}.{station}.{location}.{channel}.mseed"
         mseed_dir = f"{waveforms_dir}/{network}/{year:04d}/{jday:03d}"
         if not os.path.exists(mseed_dir):
             os.makedirs(mseed_dir, exist_ok=True)
-        tr.write(f"{root_path}/{mseed_dir}/{fname}", format="MSEED")
+        stream_temp = stream.split()
+        stream_temp.write(f"{root_path}/{mseed_dir}/{fname}", format="MSEED")
         if protocol != "file":
             # print(f"Uploading {fname} to {bucket}/{mseed_dir}/{fname}")
             fs.put(f"{root_path}/{mseed_dir}/{fname}", f"{bucket}/{mseed_dir}/{fname}")
