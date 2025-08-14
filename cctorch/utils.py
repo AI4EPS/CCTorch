@@ -24,13 +24,6 @@ import torch
 import zarr
 from tqdm.auto import tqdm
 
-import logging
-import fsspec
-from obspy import read_inventory
-from obspy.core import UTCDateTime
-import scipy.fft as sf
-from scipy.fft import next_fast_len
-
 
 # %%
 def write_results(results, result_path, ccconfig, rank=0, world_size=1):
@@ -497,7 +490,6 @@ def write_h5(fn, dataset_name, data, attrs_dict):
 
 
 def partial_hann_taper(length, taper_fraction=0.04, device="cpu"):
-        # print('Chris flag taper', length, taper_fraction)
         n_taper = int(length * taper_fraction)
         if n_taper == 0:
             return torch.ones(length, device=device)
@@ -514,7 +506,6 @@ def partial_hann_taper(length, taper_fraction=0.04, device="cpu"):
         # Build full window: start + flat + end
         ones_middle = torch.ones(length - 2 * n_taper, device=device)
         window = torch.cat([taper_start, ones_middle, taper_end, taper_tail], dim=0)
-        # window = torch.cat([taper_start, ones_middle, taper_end], dim=0)
         return window
 
 def custom_demeaned_stft(data1, nlag, hop_length, window):
@@ -575,7 +566,7 @@ def cosine_taper_4freq(n_freqs, low, high, sample_rate=20):
     high_right = high_idx + 100
     if high_right > (n_freqs - 1)*2:
         high_right = (n_freqs - 1)*2
-    print(f"Doing the classic Brutal Whiten {n_freqs} {low_left} {low_idx} {high_idx} {high_right}")
+    # print(f"Doing the classic Brutal Whiten {n_freqs} {low_left} {low_idx} {high_idx} {high_right}")
     left_start = low_left
     left_end = low_idx
     right_start = high_idx

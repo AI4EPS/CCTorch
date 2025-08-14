@@ -597,7 +597,7 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
                 stream += meta
             # stream += obspy.read(tmp)
         
-        mask_stream = stream.copy().merge(fill_value=None)
+        stream_mask = stream.copy().merge(fill_value=None)
         stream = stream.merge(fill_value=0)
 
         ## FIXME: HARDCODE for California
@@ -607,14 +607,14 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
             begin_time = obspy.UTCDateTime(year=year, julday=jday)
             end_time = begin_time + 86400  ## 1 day
             stream = stream.trim(begin_time, end_time, pad=True, fill_value=0, nearest_sample=True)
-            mask_stream = mask_stream.trim(begin_time, end_time, pad=True, fill_value=None, nearest_sample=True)
+            stream_mask = stream_mask.trim(begin_time, end_time, pad=True, fill_value=None, nearest_sample=True)
         elif tmp.startswith("s3://scedc-pds"):
             year_jday = tmp.split("/")[-1].rstrip(".ms")[-7:]
             year, jday = int(year_jday[:4]), int(year_jday[4:])
             begin_time = obspy.UTCDateTime(year=year, julday=jday)
             end_time = begin_time + 86400  ## 1 day
             stream = stream.trim(begin_time, end_time, pad=True, fill_value=0, nearest_sample=True)
-            mask_stream = mask_stream.trim(begin_time, end_time, pad=True, fill_value=None, nearest_sample=True)
+            stream_mask = stream_mask.trim(begin_time, end_time, pad=True, fill_value=None, nearest_sample=True)
     except Exception as e:
         print(f"Error reading {fname}:\n{e}")
         return None
@@ -659,7 +659,7 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
     begin_time = min([st.stats.starttime for st in stream])
     end_time = max([st.stats.endtime for st in stream])
     stream = stream.trim(begin_time, end_time, pad=True, fill_value=0)
-    mask_stream = mask_stream.trim(begin_time, end_time, pad=True, fill_value=None)
+    stream_mask = stream_mask.trim(begin_time, end_time, pad=True, fill_value=None)
 
     comp = ["3", "2", "1", "E", "N", "Z"]
     comp2idx = {"3": 0, "2": 1, "1": 2, "E": 0, "N": 1, "Z": 2}
@@ -690,7 +690,7 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
                 continue
 
             trace = stream.select(id=sta + c)[0]
-            trace_mask = mask_stream.select(id=sta + c)[0]
+            trace_mask = stream_mask.select(id=sta + c)[0]
             try:
                 mask_array = trace_mask.data.mask
                 mask_array = mask_array.astype(int)

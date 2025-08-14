@@ -25,7 +25,6 @@ if __name__ == "__main__":
 
     fs = fsspec.filesystem(protocol, token=token_file)
 
-
     for jday in jdays:
 
         # cmd = f"python mseeds1.py --year {year} --jday {jday}"
@@ -45,8 +44,7 @@ if __name__ == "__main__":
                 print(f"pairs2_{year}_{jday}.txt is empty")
                 continue
 
-        # cmd = f"python /opt/CCTorch/run.py --pair_list=pairs2_{year}_{jday}.txt --data_list1=mseeds2_{year}_{jday}.txt --data_format1=mseed --sampling_rate=20 --mode=AN --maxlag 300  --block_size1 300 --block_size2 300 --batch_size 4  --domain stft --device=cuda"
-        cmd = f"python ../../run.py --pair_list=pairs2_{year}_{jday}_MLR.txt --data_list1=mseeds2_{year}_{jday}.txt --data_format1=mseed --sampling_rate=20 --mode=AN --maxlag 300  --block_size1 300 --block_size2 300 --batch_size 4  --domain stft --device=cpu"
+        cmd = f"python /opt/CCTorch/run.py --pair_list=pairs2_{year}_{jday}.txt --data_list1=mseeds2_{year}_{jday}.txt --data_format1=mseed --sampling_rate=20 --mode=AN --maxlag 300  --block_size1 300 --block_size2 300 --batch_size 4  --domain stft --device=cuda"
         # cmd += f" --result_path={result_path} --result_file={year}/{year}.{jday}.h5"
         cmd += f" --result_path={result_path} --result_file={year}/{year}.{jday}.zarr"
         # cmd += f" --result_path={result_path}/{year}/{year}.{jday}"

@@ -12,7 +12,6 @@ from tqdm import tqdm
 
 from utils import get_response_paz, check_and_phase_shift
 
-
 def downsample_mseed(fname, highpass_filter=False, sampling_rate=20, root_path="./", config=None):
     """
     root_path: mapping root_path/xxx to bucket/xxx
