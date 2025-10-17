@@ -1,6 +1,9 @@
 import itertools
 import logging
+import os
+import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import fsspec
@@ -16,9 +19,6 @@ import torchaudio
 from scipy.sparse import coo_matrix
 from torch.utils.data import Dataset, IterableDataset
 from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import time
-import os
 
 
 class CCDataset(Dataset):
@@ -192,9 +192,9 @@ class CCIterableDataset(IterableDataset):
             self.data_format2 = self.data_format1
             self.cache = True
 
-        assert (
-            block_size1 >= batch_size or block_size2 >= batch_size or block_size1 * block_size2 >= batch_size
-        ), f"block_size1 = {block_size1}, block_size2 = {block_size2}, and block_size1 * block_size2 = {block_size1 * block_size2} < batch_size = {batch_size}"
+        assert block_size1 >= batch_size or block_size2 >= batch_size or block_size1 * block_size2 >= batch_size, (
+            f"block_size1 = {block_size1}, block_size2 = {block_size2}, and block_size1 * block_size2 = {block_size1 * block_size2} < batch_size = {batch_size}"
+        )
 
         block_num1 = int(np.ceil(len(unique_row) / block_size1))
         block_num2 = int(np.ceil(len(unique_col) / block_size2))
@@ -333,7 +333,6 @@ class CCIterableDataset(IterableDataset):
             next_dict = {}
 
         for l, (i, j) in enumerate(block_index):
-
             local_dict = {}
             row_index, col_index = self.group1[i], self.group2[j]
             row_matrix = self.row_matrix[row_index, :][:, col_index].tocoo()
@@ -373,7 +372,6 @@ class CCIterableDataset(IterableDataset):
             num = 0
 
             for ii, jj in zip(row_matrix.data, col_matrix.data):
-
                 if self.data_format1 == "memmap":
                     if ii not in local_dict:
                         meta1 = {
@@ -511,15 +509,18 @@ class CCIterableDataset(IterableDataset):
                     if "begin_time" in info_batch1:
                         info_batch1["begin_time"] = np.stack(info_batch1["begin_time"])
 
-                    yield {
-                        "data": data_batch1,
-                        "index": index1,
-                        "info": info_batch1,
-                    }, {
-                        "data": data_batch2,
-                        "index": index2,
-                        "info": info_batch2,
-                    }
+                    yield (
+                        {
+                            "data": data_batch1,
+                            "index": index1,
+                            "info": info_batch1,
+                        },
+                        {
+                            "data": data_batch2,
+                            "index": index2,
+                            "info": info_batch2,
+                        },
+                    )
 
                     num = 0
                     data1, index1, info1, data2, index2, info2 = [], [], [], [], [], []
@@ -547,15 +548,18 @@ class CCIterableDataset(IterableDataset):
                 if "begin_time" in info_batch1:
                     info_batch1["begin_time"] = np.stack(info_batch1["begin_time"])
 
-                yield {
-                    "data": data_batch1,
-                    "index": index1,
-                    "info": info_batch1,
-                }, {
-                    "data": data_batch2,
-                    "index": index2,
-                    "info": info_batch2,
-                }
+                yield (
+                    {
+                        "data": data_batch1,
+                        "index": index1,
+                        "info": info_batch1,
+                    },
+                    {
+                        "data": data_batch2,
+                        "index": index2,
+                        "info": info_batch2,
+                    },
+                )
 
 
 def read_data(file_name, data_path, format="h5", mode="CC", config={}):
@@ -680,7 +684,7 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
             j = comp2idx[c]
 
             if len(stream.select(id=sta + c)) == 0:
-                print(f"Empty trace: {sta+c} {begin_time}")
+                print(f"Empty trace: {sta + c} {begin_time}")
                 continue
 
             trace = stream.select(id=sta + c)[0]
@@ -770,6 +774,8 @@ def read_das_continuous_data_h5(fn, dataset_keys=[]):
         info = {}
         for key in dataset_keys:
             info[key] = f[key][:]
+    if data.ndim == 2:
+        data = data[np.newaxis, :, :]  # (nc, nx, nt)
     return data, info
 
 
