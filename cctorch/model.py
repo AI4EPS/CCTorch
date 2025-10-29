@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
+from .utils import partial_hann_taper, custom_demeaned_stft, cosine_taper_4freq
 
 class CCModel(nn.Module):
     def __init__(
@@ -40,7 +41,8 @@ class CCModel(nn.Module):
         # AN
         self.nlag = config.nlag
         self.nfft = self.nlag * 2
-        self.window = torch.hann_window(self.nfft, periodic=False).to(self.device)
+        # self.window = torch.hann_window(self.nfft, periodic=False).to(self.device)
+        self.window = partial_hann_taper(self.nfft, 0.04, self.device)
         self.spectral_whitening = config.spectral_whitening
 
     def forward(self, x):
@@ -127,6 +129,30 @@ class CCModel(nn.Module):
                 xcor = torch.mean(xcor, dim=(-3), keepdim=True)
 
         elif self.domain == "stft":
+            overlap_ratio = 0.5
+            hop_length = int(self.nlag * ((1-overlap_ratio)/0.5))
+
+            mask1 = x1['info']['mask']
+            mask2 = x2['info']['mask']
+            mask1 = torch.from_numpy(np.stack(mask1, axis=0)).float()
+            mask2 = torch.from_numpy(np.stack(mask2, axis=0)).float()
+
+            pooled_mask1 = F.max_pool2d(
+                mask1,
+                kernel_size=(1, self.nlag * 2 + 5),
+                stride=(1, hop_length),
+            )
+            pooled_mask2 = F.max_pool2d(
+                mask2,
+                kernel_size=(1, self.nlag * 2 + 5),
+                stride=(1, hop_length),
+            )
+            mask_reshaped1 = pooled_mask1.view(pooled_mask1.shape[0]*pooled_mask1.shape[1], 1, pooled_mask1.shape[-1])
+            mask_reshaped2 = pooled_mask2.view(pooled_mask2.shape[0]*pooled_mask2.shape[1], 1, pooled_mask2.shape[-1])
+
+            mask_reshaped1 = 1 - mask_reshaped1
+            mask_reshaped2 = 1 - mask_reshaped2
+
             nlag = self.nlag
             nb1, nc1, nx1, nt1 = data1.shape
             # nb2, nc2, nx2, nt2 = data2.shape
@@ -134,22 +160,27 @@ class CCModel(nn.Module):
             # data2 = data2.view(nb2 * nc2 * nx2, nt2)
             data2 = data2.view(nb1 * nc1 * nx1, nt1)
             if not self.pre_fft:
-                data1 = torch.stft(
-                    data1,
-                    n_fft=self.nlag * 2,
-                    hop_length=self.nlag,
-                    window=self.window,
-                    center=True,
-                    return_complex=True,
-                )
-                data2 = torch.stft(
-                    data2,
-                    n_fft=self.nlag * 2,
-                    hop_length=self.nlag,
-                    window=self.window,
-                    center=True,
-                    return_complex=True,
-                )
+
+                data1 = custom_demeaned_stft(data1, nlag, hop_length, self.window)
+                data2 = custom_demeaned_stft(data2, nlag, hop_length, self.window)
+
+
+                # data1 = torch.stft(
+                #     data1,
+                #     n_fft=self.nlag * 2,
+                #     hop_length=self.nlag,
+                #     window=self.window,
+                #     center=True,
+                #     return_complex=True,
+                # )
+                # data2 = torch.stft(
+                #     data2,
+                #     n_fft=self.nlag * 2,
+                #     hop_length=self.nlag,
+                #     window=self.window,
+                #     center=True,
+                #     return_complex=True,
+                # )
             if self.spectral_whitening:
                 # freqs = np.fft.fftfreq(self.nlag*2, d=self.dt)
                 # data1 = data1 / torch.clip(torch.abs(data1), min=1e-7) #float32 eps
@@ -157,7 +188,13 @@ class CCModel(nn.Module):
                 data1 = torch.exp(1j * data1.angle())
                 data2 = torch.exp(1j * data2.angle())
 
-            xcor = torch.fft.irfft(torch.sum(data1 * torch.conj(data2), dim=-1), dim=-1)
+                f_taper_asym = cosine_taper_4freq(data1.shape[1], low=0.01, high=9.8)
+                data1 = data1 * f_taper_asym
+                data2 = data2 * f_taper_asym
+
+            # xcor = torch.fft.irfft(torch.sum(data1 * torch.conj(data2), dim=-1), dim=-1)
+            xcor = torch.fft.irfft(torch.sum(data1 * torch.conj(data2) * mask_reshaped1 * mask_reshaped2, dim=-1), n=(self.nlag * 2 + 1),dim=-1)
+            xcor = xcor / data1.size(1)
             xcor = torch.roll(xcor, self.nlag, dims=-1)
             xcor = xcor.view(nb1, nc1, nx1, -1)
 

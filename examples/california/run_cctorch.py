@@ -35,7 +35,7 @@ if __name__ == "__main__":
         # print(cmd)
         # os.system(cmd)
 
-        cmd = f"python mseeds2.py --year {year} --jday {jday}"
+        cmd = f"python mseeds2.py --year {year} --jday {jday} --token_file {token_file}" 
         print(cmd)
         os.system(cmd)
 

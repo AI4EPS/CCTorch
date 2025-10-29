@@ -26,11 +26,11 @@ if __name__ == "__main__":
 
     for jday in jdays:
 
-        cmd = f"python mseeds1.py --year {year} --jday {jday}"
+        cmd = f"python mseeds1.py --year {year} --jday {jday} --protocol {protocol} --token_file {token_file} --bucket {args.bucket}"
         print(cmd)
         os.system(cmd)
 
-        cmd = f"python downsample.py --year {year} --jday {jday}"
+        cmd = f"python downsample.py --year {year} --jday {jday} --protocol {protocol} --token_file {token_file} --bucket {args.bucket}"
         print(cmd)
         os.system(cmd)
 
