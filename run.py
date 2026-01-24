@@ -601,10 +601,9 @@ def main(args):
         with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = set()
             results = []
-            cache_size = 16
-            base = cache_size * args.batch_size
-            chunk_size = 4096 // base * base
-            print(f"Using chunk size for Zarr: {chunk_size}")
+            cache_size = max(1, 4096 // args.batch_size)
+            chunk_size = cache_size * args.batch_size
+            print(f"Batch size: {args.batch_size}, Cache size: {cache_size}, Chunk size: {chunk_size}")
 
             for data in tqdm(dataloader, position=rank, desc=f"{args.mode}: {rank}/{world_size}"):
                 result = ccmodel(data)
