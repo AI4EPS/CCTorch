@@ -602,7 +602,8 @@ def main(args):
             futures = set()
             results = []
             cache_size = 16
-            chunk_size = cache_size * args.batch_size
+            base = cache_size * args.batch_size
+            chunk_size = 4096 // base * base
             print(f"Using chunk size for Zarr: {chunk_size}")
 
             for data in tqdm(dataloader, position=rank, desc=f"{args.mode}: {rank}/{world_size}"):
