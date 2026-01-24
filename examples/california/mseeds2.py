@@ -1,13 +1,9 @@
 # %%
-import multiprocessing as mp
-from concurrent.futures import ThreadPoolExecutor
-
 import fsspec
 import numpy as np
 import pandas as pd
 import zarr
 from args import parse_args
-from tqdm import tqdm
 
 from utils import (
     filter_and_sort_mseeds,
@@ -68,6 +64,7 @@ sid2idx = {sid: idx for sid, idx in zip(pairs_sid, pairs_idx)}
 
 # %%
 ccf = None
+store = None
 try:
     store = zarr.storage.FsspecStore.from_url(
         f"gs://cctorch/ambient_noise/ccf/{year}/{year}.{jday}.zarr", read_only=True, storage_options={"anon": True}
@@ -77,17 +74,11 @@ except Exception as e:
     print(f"Error opening ccf: {e}")
 
 
-def scan_ccf(s1):
-    return [(s1, s2) for s2 in ccf[s1].keys()]
-
-
 pairs_ccf = []
-if ccf is not None:
-    with ThreadPoolExecutor(max_workers=mp.cpu_count() * 4) as executor:
-        ccf_keys = list(ccf.keys())
-        futures = [executor.submit(scan_ccf, s1) for s1 in ccf_keys]
-        for future in tqdm(futures, total=len(ccf_keys), desc="Scanning ccf"):
-            pairs_ccf.extend(future.result())
+if ccf is not None and "id1" in ccf and "id2" in ccf:
+    pairs_ccf = list(zip(ccf["id1"][:], ccf["id2"][:]))
+if store is not None:
+    store.close()
 
 print(f"Total pairs: {len(pairs_sid)}")
 print(f"Processed pairs: {len(pairs_ccf)}")

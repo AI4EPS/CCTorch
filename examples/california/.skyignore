@@ -1,6 +1,8 @@
 results/
 mseed_20Hz/
 waveforms/
+.venv/
+gs:/
+__pycache__/
 mseeds*.txt
 pairs*.txt
-__pycache__

@@ -10,6 +10,7 @@ import sky
 from args import parse_args
 from sky import Storage, StorageMode
 from tqdm import tqdm
+import sys
 
 ###### Hardcoded #######
 token_json = f"{os.environ['HOME']}/.config/gcloud/application_default_credentials.json"
@@ -82,14 +83,14 @@ try:
 except Exception as e:
     print(e)
 
-# task.update_envs({"NODE_RANK": 0})
-# job_id = sky.launch(task, cluster_name="cctorch", fast=True)
-# # job_id = sky.exec(task, cluster_name="cctorch")
-# status = sky.stream_and_get(job_id)
-# # sky.tail_logs(cluster_name="cctorch8", job_id=job_id, follow=True)
-# print(f"Job ID: {job_id}, status: {status}")
+task.update_envs({"NODE_RANK": 0})
+job_id = sky.launch(task, cluster_name="cctorch", fast=True)
+# job_id = sky.exec(task, cluster_name="cctorch")
+status = sky.stream_and_get(job_id)
+# sky.tail_logs(cluster_name="cctorch8", job_id=job_id, follow=True)
+print(f"Job ID: {job_id}, status: {status}")
 
-# raise
+sys.exit(1)
 
 job_idx = 1
 requests_ids = []

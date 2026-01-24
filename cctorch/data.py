@@ -154,7 +154,7 @@ class CCIterableDataset(IterableDataset):
         self.dtype = dtype
         self.num_batch = None
 
-        self.pair_matrix, self.row_matrix, self.col_matrix, unique_row, unique_col = self.read_pairs(pair_list)
+        self.pair_matrix, self.row_matrix, self.col_matrix, unique_row, unique_col, self.total_pairs = self.read_pairs(pair_list)
         if self.mode in ["CC", "TM"]:
             self.time_before = {"P": config.time_before_p, "S": config.time_before_s}
         if self.mode == "CC":
@@ -248,9 +248,10 @@ class CCIterableDataset(IterableDataset):
         # pair_list = np.array(list(itertools.product(range(6000), range(6000))))
         # pair_list = pair_list[pair_list[:, 0] < pair_list[:, 1]]
         # pair_list = pair_list[pair_list[:, 1] - pair_list[:, 0] < 10]
+        total_pairs = len(pair_list)
         unique_row = np.sort(np.unique(pair_list[:, 0]))
         unique_col = np.sort(np.unique(pair_list[:, 1]))
-        print(f"Number of pairs: {len(pair_list)}, list1: {len(unique_row)}, list2: {len(unique_col)}")
+        print(f"Number of pairs: {total_pairs}, list1: {len(unique_row)}, list2: {len(unique_col)}")
 
         rows, cols = pair_list[:, 0], pair_list[:, 1]
         data = [True] * len(pair_list)
@@ -263,7 +264,7 @@ class CCIterableDataset(IterableDataset):
         col_index = coo_matrix((cols, (rows, cols)), shape=shape, dtype=int)
         col_index = col_index.tocsr()
 
-        return pair_matrix, row_index, col_index, unique_row, unique_col
+        return pair_matrix, row_index, col_index, unique_row, unique_col, total_pairs
 
     def filter_blocks(self, blocks):
         block_size = {}
@@ -341,6 +342,7 @@ class CCIterableDataset(IterableDataset):
             ## Prefetch
             if self.cache and self.data_format1 != "memmap" and self.data_format2 != "memmap":
                 del local_dict
+                torch.cuda.empty_cache()
                 local_dict = next_dict.copy()
                 for k in local_dict:
                     local_dict[k]["data"] = local_dict[k]["data"].to(self.device)
