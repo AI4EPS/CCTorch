@@ -597,12 +597,13 @@ def main(args):
         # Track state for pre-allocation and indexing
         arrays_initialized = False
         current_idx = 0
-        chunk_size = 4096
 
         with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = set()
             results = []
             cache_size = 16
+            chunk_size = cache_size * args.batch_size
+            print(f"Using chunk size for Zarr: {chunk_size}")
 
             for data in tqdm(dataloader, position=rank, desc=f"{args.mode}: {rank}/{world_size}"):
                 result = ccmodel(data)
