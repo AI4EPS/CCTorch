@@ -370,15 +370,11 @@ def write_ambient_noise_indexed(results, store_path, start_idx, storage_options=
     root = zarr.open_group(store, mode="r+")
 
     # Write to specific index range - no race condition since ranges don't overlap
-    try:
-        root["xcorr"][start_idx:end_idx] = xcorr_data
-        root["id1"][start_idx:end_idx] = batch_id1
-        root["id2"][start_idx:end_idx] = batch_id2
-    except Exception as e:
-        print(f"Error writing indices {start_idx}:{end_idx}: {e}")
-        print(f"Available arrays: {list(root.array_keys())}")
-        print(f"xcorr_data shape: {xcorr_data.shape}, zarr xcorr shape: {root['xcorr'].shape if hasattr(root['xcorr'], 'shape') else 'N/A'}")
-        raise
+    # FIXME: Error writing indices 50110:50174: The object cctorch/ambient_noise/ccf/2025/2025.001.zarr/id1/c/12 exceeded the rate limit for object mutation operations (create, update, and delete). Please reduce your request rate. See https://cloud.google.com/storage/docs/gcs429
+    root["xcorr"][start_idx:end_idx] = xcorr_data
+    root["id1"][start_idx:end_idx] = batch_id1
+    root["id2"][start_idx:end_idx] = batch_id2
+
 
 
 def write_xcor_data_to_h5(result, path_result, phase1="P", phase2="P"):
