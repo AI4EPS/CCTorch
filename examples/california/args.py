@@ -3,7 +3,7 @@ import argparse
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--year", type=int, default=2024)
+    parser.add_argument("--year", type=int, default=2025)
     parser.add_argument("--jday", type=int, default=1)
     parser.add_argument("--node_rank", type=int, default=0)
     parser.add_argument("--num_nodes", type=int, default=1)
