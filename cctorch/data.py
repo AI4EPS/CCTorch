@@ -602,7 +602,9 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
                     meta = obspy.read(fs, format="MSEED")
                 stream += meta
             # stream += obspy.read(tmp)
-        stream = stream.merge(fill_value="latest")
+        
+        stream_mask = stream.copy().merge(fill_value=None)
+        stream = stream.merge(fill_value=0)
 
         ## FIXME: HARDCODE for California
         if tmp.startswith("s3://ncedc-pds"):
@@ -611,12 +613,14 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
             begin_time = obspy.UTCDateTime(year=year, julday=jday)
             end_time = begin_time + 86400  ## 1 day
             stream = stream.trim(begin_time, end_time, pad=True, fill_value=0, nearest_sample=True)
+            stream_mask = stream_mask.trim(begin_time, end_time, pad=True, fill_value=None, nearest_sample=True)
         elif tmp.startswith("s3://scedc-pds"):
             year_jday = tmp.split("/")[-1].rstrip(".ms")[-7:]
             year, jday = int(year_jday[:4]), int(year_jday[4:])
             begin_time = obspy.UTCDateTime(year=year, julday=jday)
             end_time = begin_time + 86400  ## 1 day
             stream = stream.trim(begin_time, end_time, pad=True, fill_value=0, nearest_sample=True)
+            stream_mask = stream_mask.trim(begin_time, end_time, pad=True, fill_value=None, nearest_sample=True)
     except Exception as e:
         print(f"Error reading {fname}:\n{e}")
         return None
@@ -661,6 +665,7 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
     begin_time = min([st.stats.starttime for st in stream])
     end_time = max([st.stats.endtime for st in stream])
     stream = stream.trim(begin_time, end_time, pad=True, fill_value=0)
+    stream_mask = stream_mask.trim(begin_time, end_time, pad=True, fill_value=None)
 
     comp = ["3", "2", "1", "E", "N", "Z"]
     comp2idx = {"3": 0, "2": 1, "1": 2, "E": 0, "N": 1, "Z": 2}
@@ -681,6 +686,7 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
         nt = int(24 * 60 * 60 * sampling_rate) + 1
 
     data = np.zeros([3, nx, nt], dtype=np.float32)
+    mask = np.zeros([3, nx, nt], dtype=np.int8)
     for i, sta in enumerate(station_keys):
         for c in station_ids[sta]:
             j = comp2idx[c]
@@ -690,6 +696,12 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
                 continue
 
             trace = stream.select(id=sta + c)[0]
+            trace_mask = stream_mask.select(id=sta + c)[0]
+            try:
+                mask_array = trace_mask.data.mask
+                mask_array = mask_array.astype(int)
+            except:
+                mask_array = np.zeros(len(trace_mask.data))
 
             ## accerleration to velocity
             if sta[-1] == "N":
@@ -697,12 +709,13 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
 
             tmp = trace.data.astype("float32")
             data[j, i, : len(tmp)] = tmp[:nt]
+            mask[j, i, : len(mask_array)] = mask_array[:nt]
 
     # return data, {
     #     "begin_time": begin_time.datetime,  # .strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
     #     "end_time": end_time.datetime,  # .strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
     # }
-    return data, {
+    return data, {"mask": mask,
         "begin_time": np.datetime64(begin_time.datetime),
         "end_time": np.datetime64(end_time.datetime),
     }
@@ -766,18 +779,23 @@ def read_mseed_3c(fname, response=None, highpass_filter=0.0, sampling_rate=100, 
 
 
 def read_das_continuous_data_h5(fn, dataset_keys=[]):
-    with h5py.File(fn, "r") as f:
-        if "Data" in f:
-            data = f["Data"][:]
-        elif "data" in f:
-            data = f["data"][:]
-        else:
-            raise ValueError("Cannot find data in the file")
-        info = {}
-        for key in dataset_keys:
-            info[key] = f[key][:]
+    fs = fsspec.filesystem("gs", token="google_default")
+    with fs.open(fn, "rb") as f:
+        with h5py.File(f, "r") as hf:
+            if "Data" in hf:
+                data = hf["Data"][:]
+            elif "data" in hf:
+                data = hf["data"][:]
+            elif "Acquisition" in hf:
+                data = hf["Acquisition/Raw[0]/RawData"][:]
+            else:
+                raise ValueError("Cannot find data in the file")
+            info = {}
+            for key in dataset_keys:
+                info[key] = hf[key][:]
     if data.ndim == 2:
         data = data[np.newaxis, :, :]  # (nc, nx, nt)
+        
     return data, info
 
 

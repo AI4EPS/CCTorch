@@ -583,7 +583,8 @@ def main(args):
         # Initialize zarr store path
         if args.result_path.startswith("s3://") or args.result_path.startswith("gs://"):
             store_path = f"{args.result_path}/{args.result_file}"
-            storage_options = {"token": args.token}
+            # storage_options = {"token": args.token}
+            storage_options = {"token": "google_default"}
             store = zarr.storage.FsspecStore.from_url(
                 store_path, read_only=False, storage_options=storage_options
             )
@@ -601,7 +602,7 @@ def main(args):
         with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = set()
             results = []
-            cache_size = max(1, 4096 // args.batch_size)
+            cache_size = max(1, 2048 // args.batch_size)
             chunk_size = cache_size * args.batch_size
             print(f"Batch size: {args.batch_size}, Cache size: {cache_size}, Chunk size: {chunk_size}")
 
@@ -661,7 +662,6 @@ def main(args):
                             except Exception as e:
                                 logging.error(f"Error writing result: {e}")
 
-            # Handle remaining results
             if len(results) > 0:
                 batch_items = sum(r["xcorr"].shape[0] for r in results)
 
@@ -690,8 +690,8 @@ def main(args):
                     storage_options,
                 )
                 futures.add(future)
+                results = []
 
-            # Wait for all remaining futures
             for future in futures:
                 try:
                     future.result()

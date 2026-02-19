@@ -35,46 +35,50 @@ if __name__ == "__main__":
         figure_path.mkdir(parents=True)
 
     # Find Zarr stores (directories with .zarr or .h5 extension that contain Zarr data)
-    zarr_files = sorted(result_path.glob("*.zarr"))
-    if len(zarr_files) == 0:
+    zarr_files_lst = sorted(result_path.glob("*.zarr"))
+    if len(zarr_files_lst) == 0:
         # Also check for .h5 extensions that might be Zarr stores
-        zarr_files = sorted(result_path.glob("*.h5"))
-    print(f"{len(zarr_files)} zarr files found: {[f.name for f in zarr_files]}")
+        zarr_files_lst = sorted(result_path.glob("*.h5"))
+    print(f"{len(zarr_files_lst)} zarr files found: {[f.name for f in zarr_files_lst]}")
 
-    tmp = []
-    for ch1 in args.fixed_channels:
-        data = []
-        index = []
-        for zarr_file in tqdm(zarr_files, desc=f"Processing channel {ch1}"):
-            # Open Zarr store
-            store = zarr.storage.LocalStore(str(zarr_file))
-            root = zarr.open_group(store=store, mode="r")
+    for zarr_files_temp in zarr_files_lst:
+        filename = zarr_files_temp.stem
+        print(f"Processing file: {filename}")
+        zarr_files = [zarr_files_temp]
+        tmp = []
+        for ch1 in args.fixed_channels:
+            data = []
+            index = []
+            for zarr_file in tqdm(zarr_files, desc=f"Processing channel {ch1}"):
+                # Open Zarr store
+                store = zarr.storage.LocalStore(str(zarr_file))
+                root = zarr.open_group(store=store, mode="r")
 
-            # Get all channel pairs where ch1 is the first channel
-            ch1_str = str(ch1)
-            if ch1_str not in root:
+                # Get all channel pairs where ch1 is the first channel
+                ch1_str = str(ch1)
+                if ch1_str not in root:
+                    continue
+
+                ch2_list = sorted([int(x) for x in root[ch1_str].keys()])
+                for ch2 in ch2_list:
+                    # Read the cross-correlation data
+                    xcorr_data = root[ch1_str][str(ch2)][:]
+                    data.append(xcorr_data)
+                    index.append(ch2)
+
+            if len(data) == 0:
+                print(f"No data found for channel {ch1}")
                 continue
 
-            ch2_list = sorted([int(x) for x in root[ch1_str].keys()])
-            for ch2 in ch2_list:
-                # Read the cross-correlation data
-                xcorr_data = root[ch1_str][str(ch2)][:]
-                data.append(xcorr_data)
-                index.append(ch2)
+            index = np.array(index)
+            data = np.stack(data)
+            sorted_idx = np.argsort(index)
+            index = index[sorted_idx]
+            data = data[sorted_idx]
 
-        if len(data) == 0:
-            print(f"No data found for channel {ch1}")
-            continue
-
-        index = np.array(index)
-        data = np.stack(data)
-        sorted_idx = np.argsort(index)
-        index = index[sorted_idx]
-        data = data[sorted_idx]
-
-        np.savez(figure_path / f"ambient_noise_das_{ch1}.npz", data=data, index=index)
-        plt.figure()
-        vmax = np.std(data)
-        plt.imshow(data, vmin=-vmax, vmax=vmax, aspect="auto", cmap="RdBu")
-        plt.colorbar()
-        plt.savefig(figure_path / f"ambient_noise_das_{ch1}.png", dpi=300, bbox_inches="tight")
+            np.savez(figure_path / f"{filename}_{ch1}.npz", data=data, index=index)
+            plt.figure()
+            vmax = np.std(data)
+            plt.imshow(data, vmin=-vmax, vmax=vmax, aspect="auto", cmap="RdBu")
+            plt.colorbar()
+            plt.savefig(figure_path / f"{filename}_{ch1}.png", dpi=300, bbox_inches="tight")

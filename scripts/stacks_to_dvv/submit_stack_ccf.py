@@ -10,6 +10,7 @@ import sky
 from args import parse_args
 from sky import Storage, StorageMode
 from tqdm import tqdm
+
 import sys
 
 ###### Hardcoded #######
@@ -21,23 +22,18 @@ fs = fsspec.filesystem("gs", token=token)
 
 
 args = parse_args()
-NUM_NODES = args.num_nodes
-YEAR = args.year
-YEAR_START = args.year_start
-YEAR_END = args.year_end
-JDAY_START = args.jday_start
-JDAY_END = args.jday_end
-LOCAL_STATION_FILE = args.local_station_file
+NUM_NODES = 1
+PROJECT = args.project
+FILE_MARK = args.file_mark
 task = sky.Task(
-    name=f"run-cctorch",
+    name=f"run-stack_ccf",
     setup="""
 echo "Begin setup."                                                           
 echo export WANDB_API_KEY=$WANDB_API_KEY >> ~/.bashrc
 conda install python=3.11 pip
-pip install h5py tqdm wandb pandas scipy scikit-learn numpy==1.26.4
-pip install fsspec gcsfs s3fs zarr                                           
-pip install obspy pyproj
-pip install torch torchvision torchaudio
+pip install pandas numpy==1.26.4
+pip install zarr fsspec gcsfs                                
+pip install obspy
 """,
     run="""
 num_nodes=`echo "$SKYPILOT_NODE_IPS" | wc -l`
@@ -47,14 +43,12 @@ if [ "$SKYPILOT_NODE_RANK" == "0" ]; then
     ls -al /data
     ls -al ./
 fi
-echo "Running CCTorch on (node_rank, num_node) = ($NODE_RANK, $NUM_NODES)"
-# python run_cctorch.py --year $YEAR --node_rank $NODE_RANK --num_nodes $NUM_NODES --result_path /mnt/cctorch/ambient_noise/ccf
-python run_cctorch.py --year $YEAR --year_start $YEAR_START --year_end $YEAR_END --node_rank $NODE_RANK --num_nodes $NUM_NODES --result_path gs://cctorch/ambient_noise/ccf --jday_start $JDAY_START --jday_end $JDAY_END --local_station_file $LOCAL_STATION_FILE
+echo "Running Stack CCFs on (node_rank, num_node) = ($NODE_RANK, $NUM_NODES)"
+python run_stack_ccf.py --file_mark $FILE_MARK --project $PROJECT
 """,
     workdir=".",
     num_nodes=1,
-    envs={"YEAR": YEAR, "YEAR_START": YEAR_START, "YEAR_END": YEAR_END, "NUM_NODES": NUM_NODES, 
-          "NODE_RANK": 0, "JDAY_START": JDAY_START, "JDAY_END": JDAY_END, "LOCAL_STATION_FILE": LOCAL_STATION_FILE},
+    envs={"FILE_MARK": FILE_MARK, "PROJECT": PROJECT},
 )
 
 task.set_file_mounts(
@@ -75,9 +69,9 @@ task.set_resources(
         region="us-west1",  # GCP
         # region="us-west-2",  # AWS
         # accelerators="V100:1",
-        cpus=8,
-        disk_tier="medium",
-        disk_size=200,  # GB
+        cpus=16,
+        disk_tier="low",
+        disk_size=50,  # GB
         memory=None,
         use_spot=True,
     ),
@@ -89,14 +83,14 @@ try:
 except Exception as e:
     print(e)
 
-task.update_envs({"NODE_RANK": 0})
-job_id = sky.launch(task, cluster_name="cctorch", fast=True)
-# job_id = sky.exec(task, cluster_name="cctorch")
-status = sky.stream_and_get(job_id)
-# sky.tail_logs(cluster_name="cctorch8", job_id=job_id, follow=True)
-print(f"Job ID: {job_id}, status: {status}")
+# task.update_envs({"NODE_RANK": 0})
+# job_id = sky.launch(task, cluster_name="cctorch", fast=True)
+# # job_id = sky.exec(task, cluster_name="cctorch")
+# status = sky.stream_and_get(job_id)
+# # sky.tail_logs(cluster_name="cctorch8", job_id=job_id, follow=True)
+# print(f"Job ID: {job_id}, status: {status}")
 
-sys.exit(1)
+# raise
 
 job_idx = 1
 requests_ids = []
@@ -104,10 +98,9 @@ for NODE_RANK in range(NUM_NODES):
     # for NODE_RANK in range(30):
 
     task.update_envs({"NODE_RANK": NODE_RANK})
-    cluster_name = f"cctorch-{NODE_RANK:03d}"
+    cluster_name = f"cctorch-stackCCF-{FILE_MARK}-{NODE_RANK:03d}"
 
-    # requests_ids.append(sky.jobs.launch(task, name=f"{cluster_name}"))
-    requests_ids.append(sky.launch(task, cluster_name=f"{cluster_name}"))
+    requests_ids.append(sky.jobs.launch(task, name=f"{cluster_name}"))
 
     print(f"Running cctorch on (rank={NODE_RANK}, num_node={NUM_NODES}) of {cluster_name}")
 
@@ -115,6 +108,8 @@ for NODE_RANK in range(NUM_NODES):
 
 # for request_id in requests_ids:
 #     print(sky.get(request_id))
+
+
 
 job_id, handle = sky.stream_and_get(requests_ids[0])
 cluster_name = handle.get_cluster_name()

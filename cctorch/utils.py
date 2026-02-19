@@ -289,8 +289,8 @@ def _parse_pair_ids(fname1, fname2, pair_index_fallback):
 
 def write_ambient_noise(results, root):
     """
+    Write ambient noise results to disk.
     Append ambient noise results to zarr arrays.
-
     Args:
         results: List of result dicts with xcorr data and pair info
         root: Zarr group with 'xcorr', 'id1', 'id2' arrays (created on first call)
@@ -350,8 +350,8 @@ def write_ambient_noise_indexed(results, store_path, start_idx, storage_options=
             fallback = meta.get("pair_index", [(str(i), str(i))] * xcorr.shape[0])[i]
             id1, id2 = _parse_pair_ids(fnames1[i], fnames2[i], fallback)
             batch_xcorr.append(np.squeeze(xcorr[i]))
-            batch_id1.append(id1)
-            batch_id2.append(id2)
+            batch_id1.append(str(id1))
+            batch_id2.append(str(id2))
 
     if not batch_xcorr:
         return
@@ -488,6 +488,104 @@ def write_h5(fn, dataset_name, data, attrs_dict):
         for key, val in attrs_dict.items():
             fid[dataset_name].attrs.modify(key, val)
 
+
+def partial_hann_taper(length, taper_fraction=0.04, device="cpu"):
+        n_taper = int(length * taper_fraction)
+        if n_taper == 0:
+            return torch.ones(length, device=device)
+
+        # Hann window for edges
+        x = torch.linspace(0, torch.pi / 2, n_taper, device=device)
+        taper_edge = torch.sin(x)**2   # sin² taper
+
+        taper_start = taper_edge
+        taper_end = taper_edge.flip(0)
+
+
+        # Build full window: start + flat + end
+        ones_middle = torch.ones(length - 2 * n_taper, device=device)
+        window = torch.cat([taper_start, ones_middle, taper_end], dim=0)
+        return window
+
+def custom_demeaned_stft(data1, nlag, hop_length, window):
+    """
+    Custom STFT with per-window demeaning that matches torch.stft(..., center=False)
+
+    Args:
+        data1: (B, T) time-domain signal
+        nlag: for computing n_fft = 2 * nlag + 5
+        hop_length: step size between windows
+        window: (n_fft,) window function (e.g., Hann)
+
+    Returns:
+        Complex STFT of shape (B, freq_bins, time_frames), matching torch.stft
+    """
+    n_fft = 2 * nlag + 5
+    B, T = data1.shape
+
+    # Compute number of complete frames (no padding)
+    num_frames = (T - n_fft) // hop_length + 1
+
+    # Use unfold to extract frames
+    frames = data1.unfold(dimension=-1, size=n_fft, step=hop_length)  # (B, num_frames, n_fft)
+
+    # Demean each frame
+    frames = frames - frames.mean(dim=-1, keepdim=True)
+
+    # Apply window
+    window = window.to(data1.device)
+    frames = frames * window.view(1, 1, -1)
+
+    # Apply FFT
+    stft_result = torch.fft.rfft(frames, dim=-1)  # (B, num_frames, freq_bins)
+
+    # Transpose to match torch.stft output: (B, freq_bins, time_frames)
+    stft_result = stft_result.transpose(-1, -2)
+
+    return stft_result  # shape: (B, freq_bins, time_frames)
+
+def cosine_taper_4freq(n_freqs, low, high, sample_rate=20):
+    """
+    Create a 1D cosine taper with flat region between left_end and right_start,
+    and cosine transitions on both sides.
+
+    Parameters:
+    - n_freqs: total number of frequency bins
+    - left_start, left_end, right_start, right_end: index positions in frequency domain
+
+    Returns:
+    - taper: tensor of shape [n_freqs]
+    """
+    delta_f = sample_rate / ((n_freqs - 1)*2 + 1)
+    low_idx = math.ceil(low / delta_f)
+    high_idx = math.floor(high / delta_f)
+    low_left = low_idx - 100
+    if low_left < 0:
+        low_left = 0
+    high_right = high_idx + 100
+    high_right = min(high_right, n_freqs-1)
+    # print(f"Doing the classic Brutal Whiten {n_freqs} {low_left} {low_idx} {high_idx} {high_right}")
+    left_start = low_left
+    left_end = low_idx
+    right_start = high_idx
+    right_end = high_right
+
+    taper = np.zeros(n_freqs)
+
+    # Left cosine ramp
+    for i in range(left_start, left_end):
+        frac = (i - left_start) / (left_end - left_start)
+        taper[i] = 0.5 * (1 - np.cos(np.pi * frac))
+
+    # Flat part
+    taper[left_end:right_start] = 1.0
+
+    # Right cosine ramp
+    for i in range(right_start, right_end):
+        frac = (i - right_start) / (right_end - right_start)
+        taper[i] = 0.5 * (1 + np.cos(np.pi * frac))
+    cos_taper = torch.tensor(taper, dtype=torch.float32)
+    return cos_taper[None, :, None]
 
 # # %%
 # @dataclass
