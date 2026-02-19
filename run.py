@@ -1,16 +1,14 @@
 import json
 import logging
-import multiprocessing
 import os
-import threading
 from concurrent.futures import (
     FIRST_COMPLETED,
     ProcessPoolExecutor,
-    ThreadPoolExecutor,
     wait,
 )
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
 import torch
 import torchvision.transforms as T
@@ -22,7 +20,7 @@ from tqdm import tqdm
 import utils
 from cctorch import CCDataset, CCIterableDataset, CCModel
 from cctorch.transforms import *
-from cctorch.utils import write_ambient_noise
+from cctorch.utils import write_ambient_noise_indexed
 
 
 def get_args_parser(add_help=True):
@@ -575,59 +573,128 @@ def main(args):
         events_df.to_csv(os.path.join(args.result_path, f"{ccconfig.mode}_{world_size:03d}_event.csv"), index=False)
 
     if args.mode == "AN":
-        MAX_THREADS = min(64, os.cpu_count() * 2)
-        print(f"Writing to {args.result_path}/{args.result_file} with {MAX_THREADS} threads")
+        MAX_WORKERS = min(64, os.cpu_count() * 2)
+        print(f"Writing to {args.result_path}/{args.result_file} with {MAX_WORKERS} workers")
 
-        # with h5py.File(os.path.join(args.result_path, args.result_file), "w") as fp:
+        # Get total pairs for pre-allocation
+        total_pairs = dataset.total_pairs
+        print(f"Total pairs to process: {total_pairs}")
 
-        with ProcessPoolExecutor(max_workers=MAX_THREADS) as executor:
+        # Initialize zarr store path
+        if args.result_path.startswith("s3://") or args.result_path.startswith("gs://"):
+            store_path = f"{args.result_path}/{args.result_file}"
+            # storage_options = {"token": args.token}
+            storage_options = {"token": "google_default"}
+            store = zarr.storage.FsspecStore.from_url(
+                store_path, read_only=False, storage_options=storage_options
+            )
+        else:
+            store_path = os.path.join(args.result_path, args.result_file)
+            storage_options = None
+            store = zarr.storage.LocalStore(store_path)
 
+        zarr_group = zarr.open_group(store, mode="w")
+
+        # Track state for pre-allocation and indexing
+        arrays_initialized = False
+        current_idx = 0
+
+        with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = set()
-            lock = multiprocessing.Lock()
             results = []
-            cache_size = 16
+            cache_size = max(1, 2048 // args.batch_size)
+            chunk_size = cache_size * args.batch_size
+            print(f"Batch size: {args.batch_size}, Cache size: {cache_size}, Chunk size: {chunk_size}")
 
             for data in tqdm(dataloader, position=rank, desc=f"{args.mode}: {rank}/{world_size}"):
                 result = ccmodel(data)
-                results.append(result)
+
+                # Convert tensors to numpy in main process to avoid pickling issues
+                result_np = {
+                    "xcorr": result["xcorr"].cpu().numpy(),
+                    "info1": result["info1"],
+                    "info2": result["info2"],
+                    "pair_index": result.get("pair_index"),
+                }
+                results.append(result_np)
 
                 if len(results) >= cache_size:
+                    # Count items in this batch
+                    batch_items = sum(r["xcorr"].shape[0] for r in results)
+
+                    # Pre-allocate arrays on first batch
+                    if not arrays_initialized:
+                        # Get squeezed shape to match write function behavior (np.squeeze removes all size-1 dims)
+                        xcorr_shape = np.squeeze(results[0]["xcorr"][0]).shape
+                        zarr_group.create_dataset(
+                            "xcorr",
+                            shape=(total_pairs,) + xcorr_shape,
+                            chunks=(chunk_size,) + xcorr_shape,
+                            dtype=results[0]["xcorr"].dtype,
+                        )
+                        zarr_group.create_dataset(
+                            "id1", shape=(total_pairs,), chunks=(chunk_size,), dtype=str
+                        )
+                        zarr_group.create_dataset(
+                            "id2", shape=(total_pairs,), chunks=(chunk_size,), dtype=str
+                        )
+                        arrays_initialized = True
+
+                    start_idx = current_idx
+                    current_idx += batch_items
+
+                    # Submit to worker - pass store path (string) and index range
                     future = executor.submit(
-                        write_ambient_noise,
+                        write_ambient_noise_indexed,
                         results,
-                        args.result_path,
-                        args.result_file,
-                        storage_options={"token": args.token},
+                        store_path,
+                        start_idx,
+                        storage_options,
                     )
                     futures.add(future)
                     results = []
 
-                    if len(futures) >= MAX_THREADS:
+                    if len(futures) >= MAX_WORKERS:
                         done, futures = wait(futures, return_when=FIRST_COMPLETED)
                         for completed in done:
                             try:
-                                out = completed.result()
-                                if out:
-                                    print(out)
+                                completed.result()
                             except Exception as e:
                                 logging.error(f"Error writing result: {e}")
 
             if len(results) > 0:
+                batch_items = sum(r["xcorr"].shape[0] for r in results)
+
+                if not arrays_initialized:
+                    xcorr_shape = np.squeeze(results[0]["xcorr"][0]).shape
+                    zarr_group.create_dataset(
+                        "xcorr",
+                        shape=(total_pairs,) + xcorr_shape,
+                        chunks=(chunk_size,) + xcorr_shape,
+                        dtype=results[0]["xcorr"].dtype,
+                    )
+                    zarr_group.create_dataset(
+                        "id1", shape=(total_pairs,), chunks=(chunk_size,), dtype=str
+                    )
+                    zarr_group.create_dataset(
+                        "id2", shape=(total_pairs,), chunks=(chunk_size,), dtype=str
+                    )
+                    arrays_initialized = True
+
+                start_idx = current_idx
                 future = executor.submit(
-                    write_ambient_noise,
+                    write_ambient_noise_indexed,
                     results,
-                    args.result_path,
-                    args.result_file,
-                    storage_options={"token": args.token},
+                    store_path,
+                    start_idx,
+                    storage_options,
                 )
                 futures.add(future)
                 results = []
 
             for future in futures:
                 try:
-                    out = future.result()
-                    if out:
-                        print(out)
+                    future.result()
                 except Exception as e:
                     logging.error(f"Error writing result: {e}")
 

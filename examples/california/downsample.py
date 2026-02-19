@@ -62,7 +62,7 @@ def downsample_mseed(fname, highpass_filter=False, sampling_rate=20, root_path="
                 # logging.warning(f"Resampling {trace_temp.id} from {trace_temp.stats.sampling_rate} to {sampling_rate} Hz")
                 try:
                     # print(f"Resample from {trace.stats.sampling_rate} to {sampling_rate} Hz")
-                    trace_temp.filter("lowpass", freq=9.8, zerophase=True, corners=8)
+                    trace_temp.filter("lowpass", freq=0.49*sampling_rate, zerophase=True, corners=8)
                     trace_temp.data = np.array(trace_temp.data)
                     trace_temp.interpolate(method="lanczos", sampling_rate=sampling_rate, a=1.0)
                 except Exception as e:
@@ -71,11 +71,11 @@ def downsample_mseed(fname, highpass_filter=False, sampling_rate=20, root_path="
             if datalesspz_lst[i]:
                 trace_temp.simulate(paz_remove=datalesspz_lst[i],
                         remove_sensitivity=True,
-                        pre_filt=[0.001, 0.002, 9.8, 10],
+                        pre_filt=[0.001, 0.002, 0.49*sampling_rate, 0.5*sampling_rate],
                         paz_simulate=None, )
             else:
                 print(f"Warning: No response found for {trace_temp.id}, skipping instrument removal")
-                trace_temp.filter('bandpass', freqmin=0.002, freqmax=9.8, corners=2, zerophase=True)
+                trace_temp.filter('bandpass', freqmin=0.002, freqmax=0.49*sampling_rate, corners=2, zerophase=True)
             streams[i] = trace_temp
 
         streams.merge(fill_value=None)

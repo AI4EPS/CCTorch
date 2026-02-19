@@ -13,6 +13,16 @@ def parse_args():
     parser.add_argument("--root_path", type=str, default="./")
     parser.add_argument("--result_path", type=str, default="./results")
     parser.add_argument("--knn_dist", type=int, default=300)
+
+    # --- add for more flexibility ---
+    parser.add_argument("--year_start", type=int, default=2024)
+    parser.add_argument("--year_end", type=int, default=2024)
+    parser.add_argument("--jday_start", type=int, default=1)
+    parser.add_argument("--jday_end", type=int, default=1)
+    parser.add_argument("--local_station_file", type=str, default="")
+
+    parser.add_argument("--subcluster", type=str, default="")
+    
     args = parser.parse_args()
 
     return args

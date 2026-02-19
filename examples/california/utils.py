@@ -120,7 +120,7 @@ def scan_mseeds_nc(target_year="2024", target_jday="001"):
         for root, dirs, files in fs.walk(f"{day}", maxdepth=1):
             mseeds.extend([f"{root}/{f}" for f in files])
 
-    mseeds = [parse_fname(mseed, region="NC") for mseed in mseeds]
+    mseeds = [res for mseed in mseeds if (res := parse_fname(mseed, region="NC")) is not None]
     return mseeds
 
 
@@ -152,7 +152,7 @@ def scan_mseeds_sc(target_year="2024", target_jday="001"):
             for root, dirs, files in fs.walk(f"{day}", maxdepth=1):
                 mseeds.extend([f"{root}/{f}" for f in files])
 
-    mseeds = [parse_fname(mseed, region="SC") for mseed in mseeds]
+    mseeds = [res for mseed in mseeds if (res := parse_fname(mseed, region="SC")) is not None]
     return mseeds
 
 

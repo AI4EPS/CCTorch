@@ -19,19 +19,16 @@ token_json = f"{os.environ['HOME']}/.config/gcloud/application_default_credentia
 args = parse_args()
 NUM_NODES = args.num_nodes
 YEAR = args.year
-YEAR_START = args.year_start
-YEAR_END = args.year_end
-JDAY_START = args.jday_start
-JDAY_END = args.jday_end
-LOCAL_STATION_FILE = args.local_station_file
 task = sky.Task(
-    name=f"run-downsample",
+    name=f"run-downsample_das",
     setup="""
 echo "Begin setup."                                                           
 echo export WANDB_API_KEY=$WANDB_API_KEY >> ~/.bashrc
 pip install h5py tqdm wandb pandas scipy scikit-learn numpy==1.26.4
 pip install fsspec gcsfs s3fs                                                   
 pip install obspy pyproj
+pip install "torch==2.4.1" --index-url https://download.pytorch.org/whl/cpu
+
 """,
     run="""
 num_nodes=`echo "$SKYPILOT_NODE_IPS" | wc -l`
@@ -41,13 +38,12 @@ if [ "$SKYPILOT_NODE_RANK" == "0" ]; then
     ls -al /data
     ls -al ./
 fi
-echo "Running downsample on (node_rank, num_node) = ($NODE_RANK, $NUM_NODES)"
-python run_downsample.py --year $YEAR --year_start $YEAR_START --year_end $YEAR_END --node_rank $NODE_RANK --num_nodes $NUM_NODES --jday_start $JDAY_START --jday_end $JDAY_END --local_station_file $LOCAL_STATION_FILE
+echo "Running downsample_das on (node_rank, num_node) = ($NODE_RANK, $NUM_NODES)"
+python run_downsample_das.py --year $YEAR --node_rank $NODE_RANK --num_nodes $NUM_NODES --token_file_load token/put_the_token_to_access_das_data_here.json
 """,
     workdir=".",
     num_nodes=1,
-    envs={"YEAR": YEAR, "YEAR_START": YEAR_START, "YEAR_END": YEAR_END, "NUM_NODES": NUM_NODES, "NODE_RANK": 0, 
-          "JDAY_START": JDAY_START, "JDAY_END": JDAY_END, "LOCAL_STATION_FILE": LOCAL_STATION_FILE},
+    envs={"YEAR": YEAR, "NUM_NODES": NUM_NODES, "NODE_RANK": 0},
 )
 
 task.set_file_mounts(
@@ -63,7 +59,9 @@ task.set_resources(
         region="us-west1",  # GCP
         # region="us-west-2",  # AWS
         # accelerators="V100:1",
-        cpus=8,
+        instance_type="n2-standard-16",
+        # cpus=8,
+        cpus=16,
         disk_tier="low",
         disk_size=50,  # GB
         memory=None,
@@ -78,8 +76,8 @@ except Exception as e:
     print(e)
 
 # task.update_envs({"NODE_RANK": 3})
-# # sky.launch(task, cluster_name="downsample")
-# sky.exec(task, cluster_name="downsample")
+# # sky.launch(task, cluster_name="downsample_das")
+# sky.exec(task, cluster_name="downsample_das")
 # raise
 
 job_idx = 1
@@ -88,18 +86,17 @@ for NODE_RANK in range(NUM_NODES):
     # for NODE_RANK in range(30):
 
     task.update_envs({"NODE_RANK": NODE_RANK})
-    cluster_name = f"downsample-{NODE_RANK:03d}"
+    cluster_name = f"downsample_das-{NODE_RANK:03d}"
 
-    # requests_ids.append(sky.jobs.launch(task, name=f"{cluster_name}"))
-    requests_ids.append(sky.launch(task, cluster_name=f"{cluster_name}"))
+    requests_ids.append(sky.jobs.launch(task, name=f"{cluster_name}"))
 
-    print(f"Running downsample on (rank={NODE_RANK}, num_node={NUM_NODES}) of {cluster_name}")
-
+    print(f"Running downsample_das on (rank={NODE_RANK}, num_node={NUM_NODES}) of {cluster_name}")
     job_idx += 1
 
 # for request_id in requests_ids:
 #     print(sky.get(request_id))
 
+# (Optional) stream the logs from the task to the console.
 job_id, handle = sky.stream_and_get(requests_ids[0])
 cluster_name = handle.get_cluster_name()
 returncode = sky.tail_logs(cluster_name, job_id, follow=True)

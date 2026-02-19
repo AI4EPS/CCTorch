@@ -1,13 +1,9 @@
 # %%
-import multiprocessing as mp
-from concurrent.futures import ThreadPoolExecutor
-
 import fsspec
 import numpy as np
 import pandas as pd
 import zarr
 from args import parse_args
-from tqdm import tqdm
 
 from utils import (
     filter_and_sort_mseeds,
@@ -28,6 +24,8 @@ protocol = args.protocol
 token_file = args.token_file
 bucket = args.bucket
 
+local_station_file = args.local_station_file
+
 
 # %%
 mseeds = scan_mseeds(target_year=year, target_jday=jday)
@@ -36,6 +34,17 @@ mseeds = pd.DataFrame(mseeds)
 # %%
 valid_instruments = ["HH", "BH", "EH", "SH", "DP", "EP", "HN"]
 valid_components = ["3", "2", "1", "E", "N", "Z"]
+
+if local_station_file:
+    print("Filtering mseeds using local station list")
+    nw_st_df = pd.read_csv(local_station_file)
+    target_nw = nw_st_df['network'].drop_duplicates().tolist()
+    target_st = nw_st_df['station'].drop_duplicates().tolist()
+    valid_instruments = nw_st_df['instrument'].drop_duplicates().tolist()
+
+    mseeds_filt = mseeds.copy()
+    mseeds_filt = mseeds_filt[mseeds_filt["network"].isin(target_nw)]
+    mseeds = mseeds_filt[mseeds_filt["station"].isin(target_st)]
 
 mseeds = filter_and_sort_mseeds(mseeds, valid_instruments, valid_components)
 
@@ -68,6 +77,7 @@ sid2idx = {sid: idx for sid, idx in zip(pairs_sid, pairs_idx)}
 
 # %%
 ccf = None
+store = None
 try:
     store = zarr.storage.FsspecStore.from_url(
         f"gs://cctorch/ambient_noise/ccf/{year}/{year}.{jday}.zarr", read_only=True, storage_options={"anon": True}
@@ -77,23 +87,17 @@ except Exception as e:
     print(f"Error opening ccf: {e}")
 
 
-def scan_ccf(s1):
-    return [(s1, s2) for s2 in ccf[s1].keys()]
-
-
 pairs_ccf = []
-if ccf is not None:
-    with ThreadPoolExecutor(max_workers=mp.cpu_count() * 4) as executor:
-        ccf_keys = list(ccf.keys())
-        futures = [executor.submit(scan_ccf, s1) for s1 in ccf_keys]
-        for future in tqdm(futures, total=len(ccf_keys), desc="Scanning ccf"):
-            pairs_ccf.extend(future.result())
+if ccf is not None and "id1" in ccf and "id2" in ccf:
+    pairs_ccf = list(zip(ccf["id1"][:], ccf["id2"][:]))
+if store is not None:
+    store.close()
 
 print(f"Total pairs: {len(pairs_sid)}")
 print(f"Processed pairs: {len(pairs_ccf)}")
 
 # pairs_idx = [sid2idx[pair] for pair in pairs_sid if pair not in pairs_ccf]
-# pairs_sid = set(pairs_sid) - set(pairs_ccf)
+pairs_sid = set(pairs_sid) - set(pairs_ccf)
 pairs_sid = sorted(list(pairs_sid))
 pairs_idx = [sid2idx[sid] for sid in pairs_sid]
 print(f"Remaining pairs: {len(pairs_idx)}")
@@ -108,7 +112,7 @@ with open(f"pairs2_{year}_{jday}.txt", "w") as f:
     f.writelines(f"{i},{j}\n" for i, j in pairs_idx)
 
 # %%
-fs = fsspec.filesystem(protocol, token=token_file)
+fs = fsspec.filesystem(protocol, token='google_default') # hotfix for credential issue with token_file
 fs.put(f"mseeds2_{year}_{jday}.txt", f"{bucket}/mseed_list/mseeds2_{year}_{jday}.txt")
 fs.put(f"pairs2_{year}_{jday}.txt", f"{bucket}/mseed_list/pairs2_{year}_{jday}.txt")
 print(f"mseeds2_{year}_{jday}.txt -> {bucket}/mseed_list/mseeds2_{year}_{jday}.txt")

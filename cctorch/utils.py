@@ -4,7 +4,6 @@ import json
 import math
 import multiprocessing as mp
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -32,7 +31,7 @@ def write_results(results, result_path, ccconfig, rank=0, world_size=1):
     elif ccconfig.mode == "TM":
         write_tm_events(results, result_path, ccconfig, rank=rank, world_size=world_size)
     elif ccconfig.mode == "AN":
-        write_ambient_noise(results, result_path, ccconfig, rank=rank, world_size=world_size)
+        raise ValueError("AN mode: use write_ambient_noise with zarr root directly")
     else:
         raise ValueError(f"{ccconfig.mode} not supported")
 
@@ -266,118 +265,119 @@ def write_cc_pairs(results, fp, ccconfig, lock=nullcontext(), plot_figure=False)
     #                         plt.close(fig)
 
 
-def write_ambient_noise(
-    results, result_path, result_file, fp=None, config=None, lock=nullcontext(), plot_figure=False, storage_options=None
-):
+def _parse_pair_ids(fname1, fname2, pair_index_fallback):
+    """Parse station pair IDs from filenames."""
+    if fname1.startswith("s3://ncedc-pds"):
+        parts1 = fname1.split("|")[-1].split("/")[-1].split(".")
+        parts2 = fname2.split("|")[-1].split("/")[-1].split(".")
+        id1 = f"{parts1[1]}.{parts1[0]}.{parts1[3]}.{parts1[2][:-1]}"
+        id2 = f"{parts2[1]}.{parts2[0]}.{parts2[3]}.{parts2[2][:-1]}"
+    elif fname1.startswith("s3://scedc-pds"):
+        f1 = fname1.split("|")[-1].split("/")[-1]
+        f2 = fname2.split("|")[-1].split("/")[-1]
+        id1 = f"{f1[:2]}.{f1[2:7].rstrip('_')}.{f1[10:12].rstrip('_')}.{f1[7:9]}"
+        id2 = f"{f2[:2]}.{f2[2:7].rstrip('_')}.{f2[10:12].rstrip('_')}.{f2[7:9]}"
+    elif fname1.startswith("gs://cctorch"):
+        parts1 = fname1.split("|")[-1].split("/")[-1].split(".")
+        parts2 = fname2.split("|")[-1].split("/")[-1].split(".")
+        id1 = f"{parts1[0]}.{parts1[1]}.{parts1[2]}.{parts1[3][:-1]}"
+        id2 = f"{parts2[0]}.{parts2[1]}.{parts2[2]}.{parts2[3][:-1]}"
+    else:
+        id1, id2 = pair_index_fallback
+    return id1, id2
+
+
+def write_ambient_noise(results, root):
     """
     Write ambient noise results to disk.
+    Append ambient noise results to zarr arrays.
+    Args:
+        results: List of result dicts with xcorr data and pair info
+        root: Zarr group with 'xcorr', 'id1', 'id2' arrays (created on first call)
     """
+    batch_xcorr, batch_id1, batch_id2 = [], [], []
 
-    if result_path.startswith("s3://") or result_path.startswith("gs://"):
-        fp = zarr.storage.FsspecStore.from_url(
-            f"{result_path}/{result_file}", read_only=False, storage_options=storage_options
-        )
-    else:
-        fp = zarr.storage.LocalStore(os.path.join(result_path, result_file))
+    for meta in results:
+        xcorr = np.nan_to_num(meta["xcorr"].cpu().numpy())
+        fnames1, fnames2 = meta["info1"]["file_name"], meta["info2"]["file_name"]
 
-    def process(meta):
-        xcorr = meta["xcorr"].cpu().numpy()
-        fname_list1 = meta["info1"]["file_name"]
-        fname_list2 = meta["info2"]["file_name"]
-        xcorr = np.nan_to_num(xcorr)
-        nb, nch, nx, nt = xcorr.shape
+        for i in range(xcorr.shape[0]):
+            fallback = meta["pair_index"][i] if "pair_index" in meta else (str(i), str(i))
+            id1, id2 = _parse_pair_ids(fnames1[i], fnames2[i], fallback)
+            batch_xcorr.append(np.squeeze(xcorr[i]))
+            batch_id1.append(id1)
+            batch_id2.append(id2)
 
-        for i in range(nb):
-
-            fname1 = fname_list1[i]
-            fname2 = fname_list2[i]
-
-            if fname1.startswith("s3://ncedc-pds"):
-                station1, network1, channel1, location1, D1, year1, jday1 = (
-                    fname1.split("|")[-1].split("/")[-1].split(".")
-                )
-                station2, network2, channel2, location2, D2, year2, jday2 = (
-                    fname2.split("|")[-1].split("/")[-1].split(".")
-                )
-                id1 = f"{network1}.{station1}.{location1}.{channel1[:-1]}"
-                id2 = f"{network2}.{station2}.{location2}.{channel2[:-1]}"
-                assert year1 == year2
-                assert jday1 == jday2
-                # fname_new = f"{year1}/{year1}.{jday1}.{extension}"
-            elif fname1.startswith("s3://scedc-pds"):
-                fname1 = fname1.split("|")[-1].split("/")[-1]  #
-                network1 = fname1[:2]
-                station1 = fname1[2:7].rstrip("_")
-                instrument1 = fname1[7:9]
-                component1 = fname1[9]
-                channel1 = f"{instrument1}{component1}"
-                location1 = fname1[10:12].rstrip("_")
-                year1 = fname1[13:17]
-                jday1 = fname1[17:20]
-                fname2 = fname2.split("|")[-1].split("/")[-1]
-                network2 = fname2[:2]
-                station2 = fname2[2:7].rstrip("_")
-                instrument2 = fname2[7:9]
-                component2 = fname2[9]
-                channel2 = f"{instrument2}{component2}"
-                location2 = fname2[10:12].rstrip("_")
-                year2 = fname2[13:17]
-                jday2 = fname2[17:20]
-                assert year1 == year2
-                assert jday1 == jday2
-                id1 = f"{network1}.{station1}.{location1}.{channel1[:-1]}"
-                id2 = f"{network2}.{station2}.{location2}.{channel2[:-1]}"
-                # fname_new = f"{year1}/{year1}.{jday1}.{extension}"
-            elif fname1.startswith("gs://cctorch"):
-                tmp1 = fname1.split("|")[-1].split("/")
-                year1, jday1 = tmp1[-3], tmp1[-2]
-                network1, station1, location1, channel1, _ = tmp1[-1].split(".")
-                tmp2 = fname2.split("|")[-1].split("/")
-                year2, jday2 = tmp2[-3], tmp2[-2]
-                network2, station2, location2, channel2, _ = tmp2[-1].split(".")
-                assert year1 == year2
-                assert jday1 == jday2
-                id1 = f"{network1}.{station1}.{location1}.{channel1[:-1]}"
-                id2 = f"{network2}.{station2}.{location2}.{channel2[:-1]}"
-                # fname_new = f"{year1}/{year1}.{jday1}.{extension}"
-            else:
-                id1, id2 = meta["pair_index"][i]
-            data = np.squeeze(xcorr[i, :, :, :])
-            zarr.create_array(fp, name=f"{id1}/{id2}", data=data, overwrite=True)
-
+    if not batch_xcorr:
         return
 
-    # for meta in results:
-    #     process(meta)
+    xcorr_data = np.stack(batch_xcorr, axis=0)
 
-    with ThreadPoolExecutor(max_workers=(len(results))) as executor:
-        futures = [executor.submit(process, meta) for meta in results]
-        for future in as_completed(futures):
-            try:
-                out = future.result()
-                if out:
-                    print(out)
-            except Exception as e:
-                print(f"Error processing batch: {e}")
-
-    ## save to numpy
-    # if not os.path.exists(f"{result_path}/{id1}"):
-    #     os.makedirs(f"{result_path}/{id1}", exist_ok=True)
-    # np.save(f"{result_path}/{id1}/{id2}.npy", data)
-
-    ## save to hdf5
-    # if f"{id1}/{id2}" not in fp:
-    #     gp = fp.create_group(f"{id1}/{id2}")
-    #     ds = gp.create_dataset("xcorr", data=data)
-    #     ds.attrs["count"] = 1
-    # else:
-    #     gp = fp[f"{id1}/{id2}"]
-    #     ds = gp["xcorr"]
-    #     count = ds.attrs["count"]
-    #     ds[:] = count / (count + 1) * ds[:] + data / (count + 1)
-    #     ds.attrs["count"] = count + 1
+    if "xcorr" not in root:
+        # First write: create arrays
+        root.create_dataset("xcorr", shape=xcorr_data.shape, data=xcorr_data, chunks=(1024,) + xcorr_data.shape[1:])
+        root.create_dataset("id1", shape=(len(batch_id1),), data=batch_id1, chunks=(1024,), dtype=str)
+        root.create_dataset("id2", shape=(len(batch_id2),), data=batch_id2, chunks=(1024,), dtype=str)
+    else:
+        # Append to existing
+        root["xcorr"].append(xcorr_data)
+        root["id1"].append(batch_id1)
+        root["id2"].append(batch_id2)
 
     return
+
+
+def write_ambient_noise_indexed(results, store_path, start_idx, storage_options=None):
+    """
+    Write ambient noise results to pre-allocated zarr arrays at specific indices.
+
+    Each worker opens its own zarr connection and writes to non-overlapping indices,
+    enabling safe parallel writes from multiple processes.
+
+    Args:
+        results: List of result dicts with numpy arrays (already converted from tensors)
+        store_path: Path to zarr store (string, not object)
+        start_idx: Starting index for this batch
+        storage_options: Optional dict for cloud storage (e.g., {"token": "..."})
+    """
+    batch_xcorr, batch_id1, batch_id2 = [], [], []
+
+    for meta in results:
+        xcorr = np.nan_to_num(meta["xcorr"])  # Already numpy
+        fnames1, fnames2 = meta["info1"]["file_name"], meta["info2"]["file_name"]
+
+        for i in range(xcorr.shape[0]):
+            fallback = meta.get("pair_index", [(str(i), str(i))] * xcorr.shape[0])[i]
+            id1, id2 = _parse_pair_ids(fnames1[i], fnames2[i], fallback)
+            batch_xcorr.append(np.squeeze(xcorr[i]))
+            batch_id1.append(str(id1))
+            batch_id2.append(str(id2))
+
+    if not batch_xcorr:
+        return
+
+    xcorr_data = np.stack(batch_xcorr, axis=0)
+    end_idx = start_idx + len(batch_xcorr)
+
+    # Each worker opens its own store connection
+    if store_path.startswith("s3://") or store_path.startswith("gs://"):
+        store = zarr.storage.FsspecStore.from_url(
+            store_path, read_only=False, storage_options=storage_options or {}
+        )
+    else:
+        store = zarr.storage.LocalStore(store_path)
+
+    root = zarr.open_group(store, mode="r+")
+
+    # Write to specific index range - no race condition since ranges don't overlap
+    # FIXME: Error writing indices 50110:50174: The object cctorch/ambient_noise/ccf/2025/2025.001.zarr/id1/c/12 exceeded the rate limit for object mutation operations (create, update, and delete). Please reduce your request rate. See https://cloud.google.com/storage/docs/gcs429
+    try:
+        root["xcorr"][start_idx:end_idx] = xcorr_data
+        root["id1"][start_idx:end_idx] = batch_id1
+        root["id2"][start_idx:end_idx] = batch_id2
+    except Exception as e:
+        print(f"Error writing indices {start_idx}:{end_idx}: {e}")
+
 
 
 def write_xcor_data_to_h5(result, path_result, phase1="P", phase2="P"):
@@ -500,12 +500,11 @@ def partial_hann_taper(length, taper_fraction=0.04, device="cpu"):
 
         taper_start = taper_edge
         taper_end = taper_edge.flip(0)
-        taper_tail = torch.zeros(5, device=device)
 
 
         # Build full window: start + flat + end
         ones_middle = torch.ones(length - 2 * n_taper, device=device)
-        window = torch.cat([taper_start, ones_middle, taper_end, taper_tail], dim=0)
+        window = torch.cat([taper_start, ones_middle, taper_end], dim=0)
         return window
 
 def custom_demeaned_stft(data1, nlag, hop_length, window):
@@ -564,8 +563,7 @@ def cosine_taper_4freq(n_freqs, low, high, sample_rate=20):
     if low_left < 0:
         low_left = 0
     high_right = high_idx + 100
-    if high_right > (n_freqs - 1)*2:
-        high_right = (n_freqs - 1)*2
+    high_right = min(high_right, n_freqs-1)
     # print(f"Doing the classic Brutal Whiten {n_freqs} {low_left} {low_idx} {high_idx} {high_right}")
     left_start = low_left
     left_end = low_idx

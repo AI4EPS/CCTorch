@@ -24,6 +24,8 @@ protocol = args.protocol
 token_file = args.token_file
 bucket = args.bucket
 
+local_station_file = args.local_station_file
+
 # %%
 
 mseeds_nc = scan_mseeds_nc(target_year=year, target_jday=jday)
@@ -36,6 +38,17 @@ mseeds = pd.DataFrame(mseeds_nc + mseeds_sc)
 # %%
 valid_instruments = ["HH", "BH", "EH", "SH", "DP", "EP", "HN"]
 valid_components = ["3", "2", "1", "E", "N", "Z"]
+
+if local_station_file:
+    print("Filtering mseeds using local station list")
+    nw_st_df = pd.read_csv(local_station_file)
+    target_nw = nw_st_df['network'].drop_duplicates().tolist()
+    target_st = nw_st_df['station'].drop_duplicates().tolist()
+    valid_instruments = nw_st_df['instrument'].drop_duplicates().tolist()
+
+    mseeds_filt = mseeds.copy()
+    mseeds_filt = mseeds_filt[mseeds_filt["network"].isin(target_nw)]
+    mseeds = mseeds_filt[mseeds_filt["station"].isin(target_st)]
 
 mseeds = filter_and_sort_mseeds(mseeds, valid_instruments, valid_components)
 
@@ -60,11 +73,11 @@ if len(processed) > 0:
     print(f"Before filtering: {len(processed)}")
     print(mseeds.head())
     print(processed.head())
-    # mseeds = mseeds[
-    #     ~mseeds.set_index(["year", "jday", "network", "station"]).index.isin(
-    #         processed.set_index(["year", "jday", "network", "station"]).index
-    #     )
-    # ]
+    mseeds = mseeds[
+        ~mseeds.set_index(["year", "jday", "network", "station"]).index.isin(
+            processed.set_index(["year", "jday", "network", "station"]).index
+        )
+    ]
     print(f"After filtering: {len(mseeds) = }")
     print(mseeds.head())
 
