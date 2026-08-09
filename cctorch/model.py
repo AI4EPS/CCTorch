@@ -98,33 +98,58 @@ class CCModel(nn.Module):
                 shift_index = (nt_index + shift_index.unsqueeze(-1)) % nt1
                 data1 = data1.gather(-1, shift_index)
 
+            ## A template slot is nt2 samples wide, but a P window truncated at the S
+            ## arrival fills only part of it and the rest is zero padding. The mask marks
+            ## the real samples, so the padding is left out of both the template's own
+            ## normalization and the running mean/std of the continuous data it is compared
+            ## against. Without it a template that fills 250 of 400 samples correlates with
+            ## a copy of itself at ~0.6 instead of 1.0.
+            if "template_mask" in x2["info"]:
+                mask = x2["info"]["template_mask"]
+                if not torch.is_tensor(mask):
+                    mask = torch.as_tensor(np.asarray(mask))
+                mask = mask.to(device=data2.device, dtype=data2.dtype)
+            else:
+                mask = torch.ones_like(data2)
+            n_valid = mask.sum(dim=-1, keepdim=True).clamp(min=1.0)
+            ## channels that carry no data at all -- a single-component station leaves two
+            ## of the three empty -- must not be averaged in below, or the best cc such a
+            ## station can reach is 1/3 and it never clears min_cc
+            n_chan = (mask.sum(dim=-1) > 0).sum(dim=-2, keepdim=True).clamp(min=1)
+
             if self.normalize:
-                data2 = data2 - torch.mean(data2, dim=-1, keepdim=True)
-                data2 = data2 / (torch.std(data2, dim=-1, keepdim=True) + eps)
+                ## population std over the valid samples, not torch.std's sample std: the
+                ## denominator below counts the same n, so the pair is the plain Pearson
+                ## coefficient. (torch.std divides by n-1 and left cc high by sqrt(n/(n-1)).)
+                data2 = data2 * mask
+                data2 = (data2 - data2.sum(dim=-1, keepdim=True) / n_valid) * mask
+                data2 = data2 / (torch.sqrt((data2**2).sum(dim=-1, keepdim=True) / n_valid) + eps)
                 data1 = data1 - torch.mean(data1, dim=-1, keepdim=True)
                 data1 = data1 / (torch.std(data1, dim=-1, keepdim=True) + eps)
 
             data1 = data1.view(1, nb1 * nc1 * nx1, nt1)  # long
-            data2 = data2.view(nb2 * nc2 * nx2, 1, nt2)  # short
+            data2 = data2.reshape(nb2 * nc2 * nx2, 1, nt2)  # short
+            mask = mask.reshape(nb2 * nc2 * nx2, 1, nt2)
 
             # xcorr
             data1 = F.pad(data1, (nlag, nt2 - 1 - nlag), mode="constant", value=0)
             xcor = F.conv1d(data1, data2, stride=1, groups=nb1 * nc1 * nx1)
 
             if self.normalize:
-                data1 = data1.view(nb1, nc1 * nx1, -1)
-                xcor = xcor.view(nb2, nc2 * nx2, -1)
-                EY2 = F.avg_pool1d(data1**2, kernel_size=nt2, stride=1)
-                EYEY = F.avg_pool1d(data1, kernel_size=nt2, stride=1) ** 2
-                std1 = torch.sqrt(torch.clamp(EY2 - EYEY, 0))
-                xcor = xcor / nt2 / (std1 + eps)
+                ## the same grouped convolution, with the mask as the kernel, gives the
+                ## running sums of the continuous data over each template's own window
+                n = n_valid.reshape(1, nb2 * nc2 * nx2, 1)
+                sum1 = F.conv1d(data1, mask, stride=1, groups=nb1 * nc1 * nx1)
+                sum2 = F.conv1d(data1**2, mask, stride=1, groups=nb1 * nc1 * nx1)
+                std1 = torch.sqrt(torch.clamp(sum2 / n - (sum1 / n) ** 2, 0))
+                xcor = xcor / n / (std1 + eps)
 
             xcor = xcor.view(nb2, nc2, nx2, -1)
 
             if self.reduce_x:
                 xcor = torch.sum(xcor, dim=(-2), keepdim=True)
             if self.reduce_c:
-                xcor = torch.mean(xcor, dim=(-3), keepdim=True)
+                xcor = torch.sum(xcor, dim=(-3), keepdim=True) / n_chan.unsqueeze(-1)
 
         elif self.domain == "stft":
             nlag = self.nlag

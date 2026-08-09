@@ -21,6 +21,10 @@ from torch.utils.data import Dataset, IterableDataset
 from tqdm import tqdm
 
 
+## per-pick arrays that have to become one array per batch before the model sees them
+STACK_KEYS = ("traveltime", "traveltime_mask", "traveltime_index", "template_mask")
+
+
 class CCDataset(Dataset):
     def __init__(
         self,
@@ -217,6 +221,14 @@ class CCIterableDataset(IterableDataset):
                 mode="r",
                 shape=tuple(config.template_shape),
             )
+            self.template_mask = None
+            if hasattr(config, "template_mask_file"):
+                self.template_mask = np.memmap(
+                    config.template_mask_file,
+                    dtype=bool,
+                    mode="r",
+                    shape=tuple(config.template_shape),
+                )
             self.traveltime = np.memmap(
                 config.traveltime_file,
                 dtype=np.float32,
@@ -435,6 +447,12 @@ class CCIterableDataset(IterableDataset):
                                 "time_before": self.time_before[self.data_list2.loc[jj, "phase_type"]],
                             },
                         }
+                        ## which samples of the slot are real data rather than the zero
+                        ## padding left by a truncated (non-overlapping) window; absent for
+                        ## templates written before template_mask.dat existed, and the model
+                        ## treats an absent mask as all-valid
+                        if self.template_mask is not None:
+                            meta2["info"]["template_mask"] = self.template_mask[jj]
                         data = torch.tensor(meta2["data"], dtype=self.dtype).to(self.device)
                         if self.transforms is not None:
                             data = self.transforms(data)
@@ -500,14 +518,10 @@ class CCIterableDataset(IterableDataset):
 
                     info_batch1 = {k: [x[k] for x in info1] for k in info1[0].keys()}
                     info_batch2 = {k: [x[k] for x in info2] for k in info2[0].keys()}
-                    if "traveltime" in info_batch1:
-                        info_batch1["traveltime"] = np.stack(info_batch1["traveltime"])
-                        info_batch1["traveltime_mask"] = np.stack(info_batch1["traveltime_mask"])
-                        info_batch1["traveltime_index"] = np.stack(info_batch1["traveltime_index"])
-                    if "traveltime" in info_batch2:
-                        info_batch2["traveltime"] = np.stack(info_batch2["traveltime"])
-                        info_batch2["traveltime_mask"] = np.stack(info_batch2["traveltime_mask"])
-                        info_batch2["traveltime_index"] = np.stack(info_batch2["traveltime_index"])
+                    for info_batch in (info_batch1, info_batch2):
+                        for key in STACK_KEYS:
+                            if key in info_batch:
+                                info_batch[key] = np.stack(info_batch[key])
                     if "begin_time" in info_batch1:
                         info_batch1["begin_time"] = np.stack(info_batch1["begin_time"])
 
@@ -539,14 +553,10 @@ class CCIterableDataset(IterableDataset):
                 #     data_batch1 = data_batch1.repeat(1, data_batch2.shape[1] // data_batch1.shape[1], 1, 1)
                 info_batch1 = {k: [x[k] for x in info1] for k in info1[0].keys()}
                 info_batch2 = {k: [x[k] for x in info2] for k in info2[0].keys()}
-                if "traveltime" in info_batch1:
-                    info_batch1["traveltime"] = np.stack(info_batch1["traveltime"])
-                    info_batch1["traveltime_mask"] = np.stack(info_batch1["traveltime_mask"])
-                    info_batch1["traveltime_index"] = np.stack(info_batch1["traveltime_index"])
-                if "traveltime" in info_batch2:
-                    info_batch2["traveltime"] = np.stack(info_batch2["traveltime"])
-                    info_batch2["traveltime_mask"] = np.stack(info_batch2["traveltime_mask"])
-                    info_batch2["traveltime_index"] = np.stack(info_batch2["traveltime_index"])
+                for info_batch in (info_batch1, info_batch2):
+                    for key in STACK_KEYS:
+                        if key in info_batch:
+                            info_batch[key] = np.stack(info_batch[key])
                 if "begin_time" in info_batch1:
                     info_batch1["begin_time"] = np.stack(info_batch1["begin_time"])
 
@@ -630,7 +640,13 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
         if trace.stats.sampling_rate != sampling_rate:
             logging.info(f"Resampling {trace.id} from {trace.stats.sampling_rate} to {sampling_rate} Hz")
             try:
-                trace = trace.interpolate(sampling_rate, method="linear")
+                ## Same route cut_templates_cc.py takes, so the two do not disagree on the
+                ## 40 Hz channels: linear interpolation up to 100 Hz is not the same filter
+                ## as a Fourier resample, and the difference alone costs ~0.015 in cc.
+                if trace.stats.sampling_rate % sampling_rate == 0:
+                    trace = trace.decimate(int(trace.stats.sampling_rate / sampling_rate))
+                else:
+                    trace = trace.resample(sampling_rate)
                 if tmp.startswith("s3://ncedc-pds"):
                     trace = trace.trim(begin_time, end_time, pad=True, fill_value=0, nearest_sample=True)
                 elif tmp.startswith("s3://scedc-pds"):
@@ -651,6 +667,16 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
         if highpass_filter:
             logging.info(f"Highpass filtering {trace.id} from {trace.stats.sampling_rate} to 1 Hz")
             trace = trace.filter("highpass", freq=1.0)
+
+        ## Same passband the templates were cut in, otherwise the two are not comparable and
+        ## the correlation of a waveform with itself falls well below 1.
+        freqmin = getattr(config, "freqmin", None)
+        freqmax = getattr(config, "freqmax", None)
+        if freqmin is not None and freqmax is not None:
+            nyquist = 0.5 * trace.stats.sampling_rate
+            trace = trace.filter(
+                "bandpass", freqmin=freqmin, freqmax=min(freqmax, 0.999 * nyquist), corners=4, zerophase=True
+            )
 
         tmp_stream.append(trace)
 
@@ -692,7 +718,10 @@ def read_mseed(fname, highpass_filter=False, sampling_rate=100, config=None):
             trace = stream.select(id=sta + c)[0]
 
             ## accerleration to velocity
-            if sta[-1] == "N":
+            ## Off by default: the templates are cut straight from the raw channel, so
+            ## integrating only this side leaves the accelerometers correlating against a
+            ## differently-shaped waveform (cc ~0.88 instead of ~1.0 on HN).
+            if sta[-1] == "N" and getattr(config, "integrate_accelerometer", False):
                 trace = trace.integrate().filter("highpass", freq=1.0)
 
             tmp = trace.data.astype("float32")
