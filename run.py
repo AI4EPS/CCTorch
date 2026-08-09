@@ -275,8 +275,8 @@ def main(args):
         postprocess.append(DetectPeaksCC(kernel=3, stride=1, topk=2))
     elif args.mode == "TM":
         postprocess.append(
-            DetectPeaksTM(vmin=0.6, kernel=301, stride=1, topk=3600 // 5, nmad=getattr(ccconfig, "nmad", 0.0))
-        )  # assume 100Hz and 1 hour file
+            DetectPeaksTM(vmin=0.6, kernel=301, stride=1, nmad=getattr(ccconfig, "nmad", 0.0))
+        )  # topk defaults to every peak the NMS kernel can produce in the file
     elif args.mode == "AN":
         ## TODO: add postprocess for ambient noise
         pass
@@ -407,29 +407,38 @@ def main(args):
                 nmad = getattr(ccconfig, "nmad", 0.0)
                 mad_ceiling = getattr(ccconfig, "mad_ceiling", 0.99)
                 mad = result["mad"][:, 0, 0, 0].cpu().numpy() if "mad" in result else None
-                for ii in range(len(idx_sta)):
-                    thresh = ccconfig.min_cc
-                    if nmad > 0 and mad is not None:
-                        adaptive = nmad * float(mad[ii])
-                        if adaptive > mad_ceiling:
-                            n_capped += 1
-                            adaptive = mad_ceiling
-                        thresh = max(thresh, adaptive)
-                    for jj in range(len(origin_time[ii])):
-                        if max_cc[ii][jj].item() > thresh:
-                            result_df.append(
-                                {
-                                    "idx_mseed": idx_mseed[ii],
-                                    "idx_eve": idx_eve[ii],
-                                    "idx_sta": idx_sta[ii],
-                                    "phase_type": phase_type[ii],
-                                    "phase_time": phase_time[ii][jj].item(),
-                                    "origin_time": origin_time[ii][jj].item(),
-                                    "cc": max_cc[ii][jj].item(),
-                                    "mad": float(mad[ii]) if mad is not None else np.nan,
-                                    "threshold": thresh,
-                                }
-                            )
+
+                ## DetectPeaksTM already returns these as numpy; only mad is still a tensor
+                cc = np.asarray(max_cc)  # (npair, npeak)
+                if nmad > 0 and mad is not None:
+                    adaptive = np.minimum(nmad * mad, mad_ceiling)
+                    n_capped += int((nmad * mad > mad_ceiling).sum())
+                    thresh = np.maximum(ccconfig.min_cc, adaptive)
+                else:
+                    thresh = np.full(cc.shape[0], ccconfig.min_cc, dtype=float)
+
+                ## one row per peak above its own trace's threshold. Vectorised because the
+                ## number of peaks scales with the length of the file: over a day it is tens
+                ## of thousands per pair, and a python loop over all of them costs minutes
+                ## per rank while contributing nothing but the comparison.
+                keep = cc > thresh[:, None]
+                ip, jp = np.nonzero(keep)
+                if len(ip):
+                    result_df.append(
+                        pd.DataFrame(
+                            {
+                                "idx_mseed": np.asarray(idx_mseed)[ip],
+                                "idx_eve": np.asarray(idx_eve)[ip],
+                                "idx_sta": np.asarray(idx_sta)[ip],
+                                "phase_type": np.asarray(phase_type)[ip],
+                                "phase_time": np.asarray(phase_time)[ip, jp],
+                                "origin_time": np.asarray(origin_time)[ip, jp],
+                                "cc": cc[ip, jp],
+                                "mad": (mad[ip] if mad is not None else np.full(len(ip), np.nan)),
+                                "threshold": thresh[ip],
+                            }
+                        )
+                    )
 
         if n_capped > 0:
             print(f"\n[rank {rank}] {n_capped} correlation traces had nmad*MAD above the "
@@ -543,7 +552,8 @@ def main(args):
     if ccconfig.mode == "TM":
 
         if len(result_df) > 0:
-            result_df = pd.DataFrame(result_df)
+            ## a list of per-batch frames now, not a list of row dicts
+            result_df = pd.concat(result_df, ignore_index=True)
             result_df.to_csv(
                 os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}.csv"), index=False
             )

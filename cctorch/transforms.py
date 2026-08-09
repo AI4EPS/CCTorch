@@ -238,7 +238,7 @@ class DetectPeaksCC(torch.nn.Module):
 
 
 class DetectPeaksTM(torch.nn.Module):
-    def __init__(self, vmin=0.6, kernel=300, stride=1, topk=2, vabs=True, interp=True, sampling_rate=100.0,
+    def __init__(self, vmin=0.6, kernel=300, stride=1, topk=None, vabs=True, interp=True, sampling_rate=100.0,
                  nmad=0.0, mad_stride=100):
         super().__init__()
         ## NOTE: vmin is accepted but not applied -- this class only finds and ranks peaks,
@@ -280,8 +280,16 @@ class DetectPeaksTM(torch.nn.Module):
 
         smax = F.max_pool2d(xcorr, (1, self.kernel), stride=(1, self.stride), padding=(0, self.kernel // 2))
 
+        ## Keep every peak the suppression above can produce: it already enforces a
+        ## minimum separation of `kernel` samples, so nt // kernel is the most that can
+        ## survive and any smaller cap discards real ones. This was hardcoded to 3600//5,
+        ## an hour's worth at one peak per 5 s, while the files here are 24 h -- so 23/24 of
+        ## each day could not yield a detection however good the match. Pass an int to cap.
+        topk = self.topk if self.topk is not None else max(1, nt // self.kernel)
+        topk = min(topk, nt)
+
         keep = (smax == xcorr).float()
-        topk_score, topk_idx = torch.topk(xcorr * keep, self.topk, sorted=True)  # nb, 1, 1, k
+        topk_score, topk_idx = torch.topk(xcorr * keep, topk, sorted=True)  # nb, 1, 1, k
         topk_score, topk_idx = topk_score.cpu().numpy(), topk_idx.cpu().numpy()
 
         if ("begin_time" in meta["info1"]) and ("traveltime" in meta["info2"]):
