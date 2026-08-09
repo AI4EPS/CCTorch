@@ -6,6 +6,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
+## Smallest running std of the normalised continuous data that is treated as real signal.
+## Live windows sit at ~0.1-1 and gap-filled dead ones at ~1e-11, so anything in between is
+## unambiguous. Deliberately independent of the working dtype -- see the use site.
+VAR_FLOOR = 1e-6
+
 
 class CCModel(nn.Module):
     def __init__(
@@ -36,6 +41,12 @@ class CCModel(nn.Module):
         # TM
         self.shift_t = config.shift_t
         self.normalize = config.normalize
+        ## Precision of the normalised correlation, from --dtype. Only consulted when
+        ## normalize is set: the unnormalised path is a bare convolution and keeps whatever
+        ## the loader produced. float32 tracks float64 to ~5e-7 here and runs 2.7x faster;
+        ## the variance is not the limiting term, despite appearances -- see
+        ## tests/qtm/test_dtype.py.
+        self.dtype = config.dtype
 
         # AN
         self.nlag = config.nlag
@@ -43,6 +54,7 @@ class CCModel(nn.Module):
         self.window = torch.hann_window(self.nfft, periodic=False).to(self.device)
         self.spectral_whitening = config.spectral_whitening
 
+    @torch.inference_mode()
     def forward(self, x):
         """Perform cross-correlation on input data
         Args:
@@ -80,13 +92,12 @@ class CCModel(nn.Module):
         elif self.domain == "time":
             ## using conv1d in time domain
             if self.normalize:
-                data1 = data1.to(torch.float64)
-                data2 = data2.to(torch.float64)
+                data1 = data1.to(self.dtype)
+                data2 = data2.to(self.dtype)
 
             nb1, nc1, nx1, nt1 = data1.shape
             nb2, nc2, nx2, nt2 = data2.shape
 
-            eps = torch.finfo(data1.dtype).eps * 10.0
             nlag = nt2 // 2
 
             if self.shift_t:
@@ -118,14 +129,26 @@ class CCModel(nn.Module):
             n_chan = (mask.sum(dim=-1) > 0).sum(dim=-2, keepdim=True).clamp(min=1)
 
             if self.normalize:
-                ## population std over the valid samples, not torch.std's sample std: the
+                ## Population std over the valid samples, not torch.std's sample std: the
                 ## denominator below counts the same n, so the pair is the plain Pearson
                 ## coefficient. (torch.std divides by n-1 and left cc high by sqrt(n/(n-1)).)
+                ##
+                ## Divide by the true std, never by (std + eps). The template sets the
+                ## numerator's scale and nothing divides it back out, so an eps tied to the
+                ## working dtype biases cc by eps/std -- and template stds are raw counts,
+                ## unrelated to it: Redwood has a channel at 3.6e-7, under float32's 1.2e-6.
+                ## Empty channels divide by 1 instead, so they stay zero rather than NaN.
                 data2 = data2 * mask
                 data2 = (data2 - data2.sum(dim=-1, keepdim=True) / n_valid) * mask
-                data2 = data2 / (torch.sqrt((data2**2).sum(dim=-1, keepdim=True) / n_valid) + eps)
+                std2 = torch.sqrt((data2**2).sum(dim=-1, keepdim=True) / n_valid)
+                data2 = data2 / torch.where(std2 > 0, std2, torch.ones_like(std2))
+                ## cc is exactly invariant under a global rescale of data1 -- both the
+                ## numerator and the running std below are linear in it -- so this is
+                ## conditioning only. The same guard costs nothing and keeps a dead
+                ## channel from becoming NaN.
                 data1 = data1 - torch.mean(data1, dim=-1, keepdim=True)
-                data1 = data1 / (torch.std(data1, dim=-1, keepdim=True) + eps)
+                std1 = torch.std(data1, dim=-1, keepdim=True)
+                data1 = data1 / torch.where(std1 > 0, std1, torch.ones_like(std1))
 
             data1 = data1.view(1, nb1 * nc1 * nx1, nt1)  # long
             data2 = data2.reshape(nb2 * nc2 * nx2, 1, nt2)  # short
@@ -136,13 +159,29 @@ class CCModel(nn.Module):
             xcor = F.conv1d(data1, data2, stride=1, groups=nb1 * nc1 * nx1)
 
             if self.normalize:
-                ## the same grouped convolution, with the mask as the kernel, gives the
-                ## running sums of the continuous data over each template's own window
+                ## The same grouped convolution, with the mask as the kernel, gives the
+                ## running sums of the continuous data over each template's own window.
+                ## These two depend only on data1 and the mask, never on the template
+                ## waveform, and every mask is a contiguous prefix -- so across the ~1.6k
+                ## templates at one station there are only ~150 distinct box lengths and
+                ## these convolutions are recomputed some 10x more often than necessary.
+                ## Exploiting that needs templates batched by station, which the current
+                ## (mseed, template) pair layout does not do. Replacing them with a cumsum
+                ## is not the answer: measured 0.63x, the scan is bandwidth-bound.
                 n = n_valid.reshape(1, nb2 * nc2 * nx2, 1)
                 sum1 = F.conv1d(data1, mask, stride=1, groups=nb1 * nc1 * nx1)
                 sum2 = F.conv1d(data1**2, mask, stride=1, groups=nb1 * nc1 * nx1)
-                std1 = torch.sqrt(torch.clamp(sum2 / n - (sum1 / n) ** 2, 0))
-                xcor = xcor / n / (std1 + eps)
+                std1_window = torch.sqrt(torch.clamp(sum2 / n - (sum1 / n) ** 2, 0))
+                ## A window with no variance carries nothing to detect, and dividing by its
+                ## std produces garbage rather than a large correlation: a gap filled by
+                ## merge() with a repeated sample and then bandpassed leaves data1 ~2e-11,
+                ## where sum2/n - (sum1/n)^2 cancels to exactly 0 but the numerator keeps a
+                ## residue, and Redwood Valley returned cc = 3747. Sending those windows to
+                ## an infinite std makes their cc exactly 0, which is the honest answer and
+                ## costs no allocation. See tests/qtm/test_dtype.py for why the additive eps
+                ## this replaces could not do the job and biased float32 by 3.4% besides.
+                std1_window.masked_fill_(std1_window <= VAR_FLOOR, float("inf"))
+                xcor = xcor / n / std1_window
 
             xcor = xcor.view(nb2, nc2, nx2, -1)
 
