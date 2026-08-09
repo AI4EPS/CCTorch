@@ -238,9 +238,16 @@ class DetectPeaksCC(torch.nn.Module):
 
 
 class DetectPeaksTM(torch.nn.Module):
-    def __init__(self, vmin=0.6, kernel=300, stride=1, topk=2, vabs=True, interp=True, sampling_rate=100.0):
+    def __init__(self, vmin=0.6, kernel=300, stride=1, topk=2, vabs=True, interp=True, sampling_rate=100.0,
+                 nmad=0.0, mad_stride=100):
         super().__init__()
+        ## NOTE: vmin is accepted but not applied -- this class only finds and ranks peaks,
+        ## and the caller does the thresholding, because it needs the mad alongside them.
+        ## Kept for signature compatibility; raising it does not tighten detection. Use
+        ## min_cc / nmad in the config instead.
         self.vmin = vmin
+        self.nmad = nmad
+        self.mad_stride = mad_stride
         self.kernel = kernel
         self.stride = stride
         self.topk = topk
@@ -252,6 +259,20 @@ class DetectPeaksTM(torch.nn.Module):
         xcorr = meta["xcorr"]
         nlag = meta["nlag"]
         nb, nc, nx, nt = xcorr.shape  # nc = 1 by reduce_c, nx = 1 based on picks
+
+        ## Noise level of each correlation trace, as median(|cc|) over the whole file --
+        ## the definition Shelly et al. (2007) and EQcorrscan use, and the reason a MAD
+        ## threshold adapts: a short P template has a higher noise floor than a long S one,
+        ## so a single absolute cc is a different criterion for every template. Taken
+        ## before the rectification below, since median(|cc|) is defined on the signed trace.
+        ##
+        ## Estimated from every mad_stride-th sample: torch.median sorts, which over a full
+        ## day of 100 Hz data is far more expensive than the correlation itself, while MAD
+        ## is a robust statistic that a 1% subsample pins down to well under a percent
+        ## (86k samples for a 24 h trace). Skipped entirely when no MAD threshold is set.
+        if self.nmad > 0:
+            sub = xcorr[..., :: self.mad_stride] if self.mad_stride > 1 else xcorr
+            meta["mad"] = sub.abs().median(dim=-1, keepdim=True).values
 
         ## consider both positive and negative peaks
         if self.vabs:
@@ -265,13 +286,22 @@ class DetectPeaksTM(torch.nn.Module):
 
         if ("begin_time" in meta["info1"]) and ("traveltime" in meta["info2"]):
             begin_time = np.array(meta["info1"]["begin_time"])
-            traveltime = [
-                x[0].item() for x in meta["info2"]["traveltime"]
-            ]  ## ENZ channels should have the same the pick
-            traveltime = (np.array(traveltime) * 1e3).astype(int).astype("timedelta64[ms]")
+            ## Travel time is stored per channel, because component traces can start at
+            ## slightly different times. Components that do not exist were never written and
+            ## still hold the 0.0 they were allocated with, so traveltime_mask says which
+            ## ones count -- ignoring it puts a single-component station a whole travel time
+            ## out. Each channel keeps its own time; they are averaged only when reduce_c
+            ## has already collapsed the channels into a single correlation series.
+            tt = np.asarray(meta["info2"]["traveltime"])[..., 0]  # batch, nch
+            w = np.asarray(meta["info2"]["traveltime_mask"])[..., 0].astype(tt.dtype)
+            if nc != tt.shape[-1]:
+                n = w.sum(axis=-1, keepdims=True)
+                tt = np.divide((tt * w).sum(axis=-1, keepdims=True), n, out=np.zeros_like(n), where=n > 0)
+
+            traveltime = (tt * 1e3).astype(int).astype("timedelta64[ms]")
             time_before = (np.array(meta["info2"]["time_before"]) * 1e3).astype(int).astype("timedelta64[ms]")
             begin_time = begin_time[:, np.newaxis, np.newaxis, np.newaxis]  # batch, nch, nx, nt
-            traveltime = traveltime[:, np.newaxis, np.newaxis, np.newaxis]
+            traveltime = traveltime[..., np.newaxis, np.newaxis]  # batch, nch, 1, 1
             time_before = time_before[:, np.newaxis, np.newaxis, np.newaxis]
 
             shift_time = (topk_idx - nlag) / self.sampling_rate

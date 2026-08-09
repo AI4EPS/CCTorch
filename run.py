@@ -133,6 +133,9 @@ def get_args_parser(add_help=True):
 
 def main(args):
     logging.basicConfig(filename="cctorch.log", level=logging.INFO)
+    ## let cuDNN time its algorithms for these shapes instead of guessing; the shapes are
+    ## fixed for a whole run, so the one-off autotune pays for itself (measured ~6%)
+    torch.backends.cudnn.benchmark = True
     utils.init_distributed_mode(args)
     rank = utils.get_rank() if args.distributed else 0
     world_size = utils.get_world_size() if args.distributed else 1
@@ -272,7 +275,7 @@ def main(args):
         postprocess.append(DetectPeaksCC(kernel=3, stride=1, topk=2))
     elif args.mode == "TM":
         postprocess.append(
-            DetectPeaksTM(vmin=0.6, kernel=301, stride=1, topk=3600 // 5)
+            DetectPeaksTM(vmin=0.6, kernel=301, stride=1, topk=3600 // 5, nmad=getattr(ccconfig, "nmad", 0.0))
         )  # assume 100Hz and 1 hour file
     elif args.mode == "AN":
         ## TODO: add postprocess for ambient noise
@@ -351,6 +354,7 @@ def main(args):
         stations = pd.read_csv(args.stations_csv)
 
         result_df = []
+        n_capped = 0  # traces whose nmad*MAD exceeded the ceiling; reported after the loop
         for i, data in enumerate(tqdm(dataloader, position=rank, desc=f"{rank}/{world_size}: computing")):
 
             if args.mode == "CC":
@@ -389,9 +393,30 @@ def main(args):
                 origin_time = result["origin_time"][:, 0, 0, :]
                 phase_time = result["phase_time"][:, 0, 0, :]
                 max_cc = result["max_cc"][:, 0, 0, :]
+                ## Detection threshold. min_cc is the absolute floor; nmad scales a
+                ## per-trace threshold off the noise level of that trace, after Shelly et
+                ## al. (2007), who use 8-9 x MAD recomputed per template per day. Both are
+                ## applied, as Shelly does -- MAD alone lets a very quiet trace pass
+                ## almost anything. nmad = 0 disables it and leaves the old behaviour.
+                ## On the noisiest traces -- single-component stations especially -- nmad *
+                ## MAD can land above 1.0, which no correlation coefficient can reach, so the
+                ## trace is silently unable to detect anything at all, including a waveform
+                ## against itself. Cap it just under 1: such a trace still demands a
+                ## near-perfect match, which is the honest reading of "its noise correlates
+                ## almost as well as its signal", rather than being dropped without trace.
+                nmad = getattr(ccconfig, "nmad", 0.0)
+                mad_ceiling = getattr(ccconfig, "mad_ceiling", 0.99)
+                mad = result["mad"][:, 0, 0, 0].cpu().numpy() if "mad" in result else None
                 for ii in range(len(idx_sta)):
+                    thresh = ccconfig.min_cc
+                    if nmad > 0 and mad is not None:
+                        adaptive = nmad * float(mad[ii])
+                        if adaptive > mad_ceiling:
+                            n_capped += 1
+                            adaptive = mad_ceiling
+                        thresh = max(thresh, adaptive)
                     for jj in range(len(origin_time[ii])):
-                        if max_cc[ii][jj].item() > ccconfig.min_cc:
+                        if max_cc[ii][jj].item() > thresh:
                             result_df.append(
                                 {
                                     "idx_mseed": idx_mseed[ii],
@@ -401,8 +426,16 @@ def main(args):
                                     "phase_time": phase_time[ii][jj].item(),
                                     "origin_time": origin_time[ii][jj].item(),
                                     "cc": max_cc[ii][jj].item(),
+                                    "mad": float(mad[ii]) if mad is not None else np.nan,
+                                    "threshold": thresh,
                                 }
                             )
+
+        if n_capped > 0:
+            print(f"\n[rank {rank}] {n_capped} correlation traces had nmad*MAD above the "
+                  f"{getattr(ccconfig, 'mad_ceiling', 0.99)} ceiling and were capped there -- their noise "
+                  f"correlates about as well as their signal, so they can only ever return a "
+                  f"near-perfect match", flush=True)
 
         if ccconfig.mode == "CC":
 
