@@ -401,6 +401,15 @@ class CCIterableDataset(IterableDataset):
                                 "time_before": self.time_before[self.data_list1.loc[ii, "phase_type"]],
                             },
                         }
+                        ## Same mask the second stream attaches below. It has to be set on
+                        ## both, because local_dict is keyed by index and shared between the
+                        ## streams: in CC mode they read the same template.dat, so whichever
+                        ## stream reaches an index first decides whether the cached entry
+                        ## carries the key, and a batch that mixes the two then fails to
+                        ## collate. Which pairs land together is decided by the pair list,
+                        ## so this stays hidden until the ordering changes.
+                        if self.template_mask is not None:
+                            meta1["info"]["template_mask"] = self.template_mask[ii]
                         data = torch.tensor(meta1["data"], dtype=self.dtype).to(self.device)
                         if self.transforms is not None:
                             data = self.transforms(data)
