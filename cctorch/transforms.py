@@ -186,6 +186,7 @@ class DetectPeaksCC(torch.nn.Module):
         nb, nc, nx, nt = xcorr.shape
 
         ## consider both positive and negative peaks
+        signed = xcorr
         if self.vabs:
             xcorr = torch.abs(xcorr)
 
@@ -193,6 +194,14 @@ class DetectPeaksCC(torch.nn.Module):
 
         keep = (smax == xcorr).float()
         topk_score, topk_idx = torch.topk(xcorr * keep, self.topk, sorted=True)  # nb, nc, nx, k
+
+        ## The peak is picked on |xcorr|, but its sign is the relative polarity of the two
+        ## waveforms, so cc is reported in [-1, 1]. Anything that wants a weight -- the dt.cc
+        ## file, any cc threshold -- takes the magnitude; `weight` below is already positive.
+        if self.vabs:
+            peak_sign = torch.sign(torch.gather(signed, -1, topk_idx[..., :1])).squeeze(-1).cpu().numpy()
+        else:
+            peak_sign = 1.0
         topk_score, topk_idx = topk_score.cpu().numpy(), topk_idx.cpu().numpy()
 
         weight = (0.1 + 3.0 * (topk_score[..., 0] - topk_score[..., 1])) * topk_score[..., 0] ** 2  # nb, nc, nx
@@ -216,8 +225,16 @@ class DetectPeaksCC(torch.nn.Module):
 
             # print(f"sub_shift: {sub_shift}, topk_idx: {topk_idx}, topk_score: {topk_score}")
 
+        topk_score = topk_score * peak_sign  # signed cc
+
+        ## per-channel results
+        meta["cc_max_c"] = topk_score  # nb, nc, nx (signed)
+        meta["cc_weight_c"] = weight  # nb, nc, nx
+        meta["cc_shift_c"] = topk_idx - nlag  # nb, nc, nx (samples)
+
+        ## best channel by weight
         idx = np.argmax(weight, axis=1, keepdims=True)  # nb, 1, nx
-        max_cc = np.take_along_axis(topk_score, idx, axis=1)  # nb, 1, nx
+        max_cc = np.take_along_axis(topk_score, idx, axis=1)  # nb, 1, nx (signed)
         shift_idx = np.take_along_axis(topk_idx, idx, axis=1)  # nb, 1, nx
         weight = np.take_along_axis(weight, idx, axis=1)  # nb, 1, nx
         shift_idx -= nlag

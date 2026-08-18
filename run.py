@@ -374,20 +374,27 @@ def main(args):
                 cc_shift = result["cc_shift"]  ## shift of cc window
                 cc_dt = result["cc_dt"]
                 tt_dt = result["tt_dt"] if "tt_dt" in result else 0.0  ## travel time difference
+                cc_max_c = result["cc_max_c"]  ## per-channel (nb, nc, nx); cc is signed, weight is positive
+                cc_weight_c = result["cc_weight_c"]
+                cc_shift_c = result["cc_shift_c"]
+                nc = cc_max_c.shape[1]
                 for ii in range(len(idx_sta)):
-                    result_df.append(
-                        {
-                            "idx_eve1": idx_eve1[ii],
-                            "idx_eve2": idx_eve2[ii],
-                            "idx_sta": idx_sta[ii],
-                            "phase_type": phase_type[ii],
-                            "tt_dt": tt_dt[ii].squeeze().item(),
-                            "dt": cc_dt[ii].squeeze().item(),
-                            "shift": cc_shift[ii].squeeze().item(),
-                            "cc": cc_max[ii].squeeze().item(),
-                            "weight": cc_weight[ii].squeeze().item(),
-                        }
-                    )
+                    row = {
+                        "idx_eve1": idx_eve1[ii],
+                        "idx_eve2": idx_eve2[ii],
+                        "idx_sta": idx_sta[ii],
+                        "phase_type": phase_type[ii],
+                        "tt_dt": tt_dt[ii].squeeze().item(),
+                        "dt": cc_dt[ii].squeeze().item(),
+                        "shift": cc_shift[ii].squeeze().item(),
+                        "cc": cc_max[ii].squeeze().item(),
+                        "weight": cc_weight[ii].squeeze().item(),
+                    }
+                    for c in range(nc):
+                        row[f"cc_{c}"] = cc_max_c[ii, c].squeeze().item()
+                        row[f"weight_{c}"] = cc_weight_c[ii, c].squeeze().item()
+                        row[f"shift_{c}"] = cc_shift_c[ii, c].squeeze().item()
+                    result_df.append(row)
 
             if args.mode == "TM":
                 origin_time = result["origin_time"][:, 0, 0, :]
@@ -475,9 +482,9 @@ def main(args):
                 #     result_df = pd.concat(result_df)
 
                 ### Efficient but less accurate when event pairs split into different files
-                # %% filter based on cc values
+                # %% filter based on cc values (cc is signed; the peak was searched on |cc|)
                 result_df = result_df[
-                    (result_df["cc"] >= ccconfig.min_cc)
+                    (result_df["cc"].abs() >= ccconfig.min_cc)
                     & (result_df["shift"].abs() <= result_df["phase_type"].map(ccconfig.max_shift))
                     & (result_df["dt"].abs() <= result_df["phase_type"].map(ccconfig.max_dt))
                 ]
