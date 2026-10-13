@@ -227,12 +227,7 @@ class DetectPeaksCC(torch.nn.Module):
 
         topk_score = topk_score * peak_sign  # signed cc
 
-        ## per-channel results
-        meta["cc_max_c"] = topk_score  # nb, nc, nx (signed)
-        meta["cc_weight_c"] = weight  # nb, nc, nx
-        meta["cc_shift_c"] = topk_idx - nlag  # nb, nc, nx (samples)
-
-        ## best channel by weight
+        ## best channel by weight (the per-channel peaks above feed this reduction; only the reduced result is kept)
         idx = np.argmax(weight, axis=1, keepdims=True)  # nb, 1, nx
         max_cc = np.take_along_axis(topk_score, idx, axis=1)  # nb, 1, nx (signed)
         shift_idx = np.take_along_axis(topk_idx, idx, axis=1)  # nb, 1, nx

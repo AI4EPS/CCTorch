@@ -374,12 +374,10 @@ def main(args):
                 cc_shift = result["cc_shift"]  ## shift of cc window
                 cc_dt = result["cc_dt"]
                 tt_dt = result["tt_dt"] if "tt_dt" in result else 0.0  ## travel time difference
-                cc_max_c = result["cc_max_c"]  ## per-channel (nb, nc, nx); cc is signed, weight is positive
-                cc_weight_c = result["cc_weight_c"]
-                cc_shift_c = result["cc_shift_c"]
-                nc = cc_max_c.shape[1]
+                # cc is the best-channel-by-weight peak, signed (its sign is the relative first-motion polarity);
+                # weight is positive. Anything that wants a weight (dt.cc, a cc threshold) takes the magnitude.
                 for ii in range(len(idx_sta)):
-                    row = {
+                    result_df.append({
                         "idx_eve1": idx_eve1[ii],
                         "idx_eve2": idx_eve2[ii],
                         "idx_sta": idx_sta[ii],
@@ -389,12 +387,7 @@ def main(args):
                         "shift": cc_shift[ii].squeeze().item(),
                         "cc": cc_max[ii].squeeze().item(),
                         "weight": cc_weight[ii].squeeze().item(),
-                    }
-                    for c in range(nc):
-                        row[f"cc_{c}"] = cc_max_c[ii, c].squeeze().item()
-                        row[f"weight_{c}"] = cc_weight_c[ii, c].squeeze().item()
-                        row[f"shift_{c}"] = cc_shift_c[ii, c].squeeze().item()
-                    result_df.append(row)
+                    })
 
             if args.mode == "TM":
                 origin_time = result["origin_time"][:, 0, 0, :]
