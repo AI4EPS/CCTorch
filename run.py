@@ -1,6 +1,8 @@
+import ctypes
 import json
 import logging
 import os
+import sys
 from concurrent.futures import (
     FIRST_COMPLETED,
     ProcessPoolExecutor,
@@ -196,7 +198,7 @@ def main(args):
         mccc = args.mccc
         use_pair_index = True if args.dataset_type == "map" else False
         # filtering
-        min_cc = 0.5
+        min_cc = 0.4 if args.mode == "CC" else 0.5  # CC: |cc| of the multichannel correlation; TM keeps its detection floor
         max_shift = {"P": int(0.5 * fs), "S": int(0.85 * fs)}
         max_dt = {"P": 3.0, "S": 3.0 * 1.73}
         max_obs = 100
@@ -272,7 +274,7 @@ def main(args):
     postprocess = []
     if args.mode == "CC":
         ## TODO: add postprocess for cross-correlation
-        postprocess.append(DetectPeaksCC(kernel=3, stride=1, topk=2))
+        postprocess.append(DetectPeaksCC(kernel=3, stride=1, topk=3))
     elif args.mode == "TM":
         postprocess.append(
             DetectPeaksTM(vmin=0.6, kernel=301, stride=1, nmad=getattr(ccconfig, "nmad", 0.0))
@@ -354,6 +356,8 @@ def main(args):
         stations = pd.read_csv(args.stations_csv)
 
         result_df = []
+        malloc_trim = getattr(ctypes.CDLL(None), "malloc_trim", None) if sys.platform == "linux" else None  # glibc only
+        origin_csv = os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}_origin.csv")
         n_capped = 0  # traces whose nmad*MAD exceeded the ceiling; reported after the loop
         for i, data in enumerate(tqdm(dataloader, position=rank, desc=f"{rank}/{world_size}: computing")):
 
@@ -374,20 +378,41 @@ def main(args):
                 cc_shift = result["cc_shift"]  ## shift of cc window
                 cc_dt = result["cc_dt"]
                 tt_dt = result["tt_dt"] if "tt_dt" in result else 0.0  ## travel time difference
-                # cc is the best-channel-by-weight peak, signed (its sign is the relative first-motion polarity);
+                # cc is the peak of the multichannel correlation, signed (its sign is the relative first-motion polarity);
                 # weight is positive. Anything that wants a weight (dt.cc, a cc threshold) takes the magnitude.
-                for ii in range(len(idx_sta)):
-                    result_df.append({
-                        "idx_eve1": idx_eve1[ii],
-                        "idx_eve2": idx_eve2[ii],
-                        "idx_sta": idx_sta[ii],
-                        "phase_type": phase_type[ii],
-                        "tt_dt": tt_dt[ii].squeeze().item(),
-                        "dt": cc_dt[ii].squeeze().item(),
-                        "shift": cc_shift[ii].squeeze().item(),
-                        "cc": cc_max[ii].squeeze().item(),
-                        "weight": cc_weight[ii].squeeze().item(),
-                    })
+                ## one frame per batch, not a dict per pair
+                batch_df = pd.DataFrame(
+                    {
+                        "idx_eve1": idx_eve1,
+                        "idx_eve2": idx_eve2,
+                        "idx_sta": idx_sta,
+                        "phase_type": phase_type,
+                        "tt_dt": tt_dt.astype(np.float64).reshape(-1),  # float32 from the model
+                        "dt": cc_dt.reshape(-1),
+                        "shift": cc_shift.reshape(-1),
+                        "cc": cc_max.reshape(-1),
+                        "weight": cc_weight.astype(np.float64).reshape(-1),  # float32 from the model
+                        "contrast": result["cc_contrast"].astype(np.float64).reshape(-1),
+                        "peak_lag": result["cc_peak_lag"].reshape(-1),
+                    }
+                )
+                ## every pair goes to the origin file as it is computed; only the pairs that pass the filter stay in memory
+                ## the lesser peaks (shift2, cc2, ...) follow the present columns, written short: 0.01 sample is the spline's grid
+                peaks = {}
+                for k in range(result["cc_peaks_cc"].shape[-1]):
+                    peaks[f"shift{k + 2}"] = result["cc_peaks_shift"][..., k].reshape(-1).round(2)
+                    peaks[f"cc{k + 2}"] = result["cc_peaks_cc"][..., k].reshape(-1).astype(np.float32)
+                batch_df.assign(**peaks).to_csv(origin_csv, mode="w" if i == 0 else "a", header=i == 0, index=False)
+                result_df.append(
+                    batch_df[
+                        (batch_df["cc"].abs() >= ccconfig.min_cc)
+                        & (batch_df["shift"].abs() <= batch_df["phase_type"].map(ccconfig.max_shift))
+                        & (batch_df["dt"].abs() <= batch_df["phase_type"].map(ccconfig.max_dt))
+                    ]
+                )
+                ## glibc keeps a batch's freed arrays once the small kept rows land among them: hand them back
+                if malloc_trim is not None and i % 100 == 0:
+                    malloc_trim(0)
 
             if args.mode == "TM":
                 origin_time = result["origin_time"][:, 0, 0, :]
@@ -451,11 +476,7 @@ def main(args):
             # %%
             if len(result_df) > 0:
 
-                result_df = pd.DataFrame(result_df)
-                result_df.to_csv(
-                    os.path.join(args.result_path, f"{ccconfig.mode}_{rank:03d}_{world_size:03d}_origin.csv"),
-                    index=False,
-                )
+                result_df = pd.concat(result_df, ignore_index=True)  # the origin file is already written, batch by batch
 
                 ##### More accurate by merging all results
                 # if world_size > 1:
@@ -475,12 +496,7 @@ def main(args):
                 #     result_df = pd.concat(result_df)
 
                 ### Efficient but less accurate when event pairs split into different files
-                # %% filter based on cc values (cc is signed; the peak was searched on |cc|)
-                result_df = result_df[
-                    (result_df["cc"].abs() >= ccconfig.min_cc)
-                    & (result_df["shift"].abs() <= result_df["phase_type"].map(ccconfig.max_shift))
-                    & (result_df["dt"].abs() <= result_df["phase_type"].map(ccconfig.max_dt))
-                ]
+                ## (the filter on cc, shift and dt ran per batch above; cc is signed, the peak was searched on |cc|)
 
                 # %% merge different instrument types of the same stations
                 stations["network_station"] = stations["network"] + "." + stations["station"]
