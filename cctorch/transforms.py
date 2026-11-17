@@ -156,8 +156,10 @@ def taper_time(data, alpha=0.8):
 
 
 def normalize(x):
+    """x (..., nc, nx, nt): remove each channel's mean, divide by the norm over channels and time."""
     x -= torch.mean(x, dim=-1, keepdims=True)
-    norm = x.square().sum(dim=-1, keepdims=True).sqrt()
+    ## the energy of each channel first, then their sum: a lone channel keeps its own norm to the bit
+    norm = x.square().sum(dim=-1, keepdims=True).sum(dim=-3, keepdims=True).sqrt()
     norm[norm == 0] = 1
     x /= norm
     return x
@@ -181,70 +183,73 @@ class DetectPeaksCC(torch.nn.Module):
         self.sampling_rate = sampling_rate
 
     def forward(self, meta):
-        xcorr = meta["xcorr"]
+        ## One correlation function per pair, one shift for all channels: the windows are normalized over channels
+        ## and time (normalize), so the sum over channels is the multichannel cc. No channel is chosen per pair.
+        signed = meta["xcorr"].sum(dim=1, keepdim=True)  # nb, 1, nx, nt
+        assert signed.abs().max() <= 1.001, "the windows must be normalized over channels and time (normalize), not per channel"
         nlag = meta["nlag"]
-        nb, nc, nx, nt = xcorr.shape
+        nb, _, nx, nt = signed.shape
 
         ## consider both positive and negative peaks
-        signed = xcorr
-        if self.vabs:
-            xcorr = torch.abs(xcorr)
+        xcorr = torch.abs(signed) if self.vabs else signed
 
         smax = F.max_pool2d(xcorr, (1, self.kernel), stride=(1, self.stride), padding=(0, self.kernel // 2))
 
-        keep = (smax == xcorr).float()
-        topk_score, topk_idx = torch.topk(xcorr * keep, self.topk, sorted=True)  # nb, nc, nx, k
+        keep = smax == xcorr
+        topk_score, topk_idx = torch.topk(xcorr * keep, self.topk, sorted=True)  # nb, 1, nx, k
 
         ## The peak is picked on |xcorr|, but its sign is the relative polarity of the two
         ## waveforms, so cc is reported in [-1, 1]. Anything that wants a weight -- the dt.cc
         ## file, any cc threshold -- takes the magnitude; `weight` below is already positive.
         if self.vabs:
-            peak_sign = torch.sign(torch.gather(signed, -1, topk_idx[..., :1])).squeeze(-1).cpu().numpy()
+            peak_sign = torch.sign(torch.gather(signed, -1, topk_idx))  # nb, 1, nx, k
+            ## half the pair's own period: samples from the top peak to the nearest peak of the opposite sign
+            ## (nt, the width of the search, when there is none)
+            apart = (torch.arange(nt, device=signed.device) - topk_idx[..., :1]).abs()
+            peak_lag = torch.where(keep & (signed * peak_sign[..., :1] < 0), apart, nt).amin(dim=-1).cpu().numpy()  # nb, 1, nx
+            peak_sign = peak_sign.cpu().numpy()
         else:
-            peak_sign = 1.0
+            peak_sign, peak_lag = 1.0, np.full((nb, 1, nx), nt)
         topk_score, topk_idx = topk_score.cpu().numpy(), topk_idx.cpu().numpy()
 
-        weight = (0.1 + 3.0 * (topk_score[..., 0] - topk_score[..., 1])) * topk_score[..., 0] ** 2  # nb, nc, nx
-        topk_score = topk_score[..., 0]  # nb, nc, nx
-        topk_idx = topk_idx[..., 0]  # nb, nc, nx
+        contrast = topk_score[..., 0] - topk_score[..., 1]  # top peak minus second peak of |cc|, nb, 1, nx
+        weight = (0.1 + 3.0 * contrast) * topk_score[..., 0] ** 2
+        ## every peak is refined and kept: the right alignment of a cycle skip is a lesser peak, so its time is measured
+        found = topk_score > 0  # nb, 1, nx, k; a correlation with fewer than k peaks leaves scores of 0
 
         if self.interp:
-            neighbor_index = np.clip(topk_idx[:, :, :, None] + np.array([-1, 0, 1]), 0, nt - 1)
-            neighbor_score = np.take_along_axis(xcorr.cpu().numpy(), neighbor_index, axis=-1)
+            neighbor_index = np.clip(topk_idx[..., None] + np.array([-1, 0, 1]), 0, nt - 1)  # nb, 1, nx, k, 3
+            neighbor_score = np.take_along_axis(xcorr.cpu().numpy()[..., None, :], neighbor_index, axis=-1)
             x = np.array([-1, 0, 1])
-            y = neighbor_score  # nb, nc, nx, 3
+            y = neighbor_score  # nb, 1, nx, k, 3
             spl = CubicSpline(x, y, axis=-1)
             x_ = np.linspace(-1, 1, 201)
-            y_ = spl(x_)  # nb, nc, nx, 101
-            ii = np.argmax(y_, axis=-1, keepdims=True)  # nb, nc, nx, 1
-            sub_shift = np.take_along_axis(x_[np.newaxis, np.newaxis, np.newaxis, :], ii, axis=-1).squeeze(
-                -1
-            )  # nb, nc, nx
-            topk_idx = topk_idx + sub_shift
-            topk_score = np.take_along_axis(y_, ii, axis=-1).squeeze(-1)  # nb, nc, nx
+            y_ = spl(x_)  # nb, 1, nx, k, 201
+            ii = np.argmax(y_, axis=-1, keepdims=True)  # nb, 1, nx, k, 1
+            topk_idx = topk_idx + x_[ii.squeeze(-1)]  # nb, 1, nx, k
+            topk_score = np.take_along_axis(y_, ii, axis=-1).squeeze(-1)  # nb, 1, nx, k
 
-            # print(f"sub_shift: {sub_shift}, topk_idx: {topk_idx}, topk_score: {topk_score}")
-
-        topk_score = topk_score * peak_sign  # signed cc
-
-        ## best channel by weight (the per-channel peaks above feed this reduction; only the reduced result is kept)
-        idx = np.argmax(weight, axis=1, keepdims=True)  # nb, 1, nx
-        max_cc = np.take_along_axis(topk_score, idx, axis=1)  # nb, 1, nx (signed)
-        shift_idx = np.take_along_axis(topk_idx, idx, axis=1)  # nb, 1, nx
-        weight = np.take_along_axis(weight, idx, axis=1)  # nb, 1, nx
-        shift_idx -= nlag
+        peaks_cc = topk_score * peak_sign  # signed cc, nb, 1, nx, k
+        peaks_shift = topk_idx - nlag
+        max_cc, shift_idx = peaks_cc[..., 0], peaks_shift[..., 0]  # the top peak, nb, 1, nx
 
         shift_t = shift_idx / self.sampling_rate
         if ("traveltime" in meta["info1"]) and ("traveltime" in meta["info2"]):
-            delta_tt = meta["info1"]["traveltime"] - meta["info2"]["traveltime"]
-            delta_tt = np.take_along_axis(delta_tt, idx, axis=1)  # nb, 1, nx
+            delta_tt = meta["info1"]["traveltime"] - meta["info2"]["traveltime"]  # nb, nc, nx
+            ## of the first channel with data in both windows: an empty slot (a vertical-only station) holds no time
+            has_data = ((meta["data1"] != 0).any(dim=-1) & (meta["data2"] != 0).any(dim=-1)).cpu().numpy()
+            delta_tt = np.take_along_axis(delta_tt, has_data.argmax(axis=1)[:, None], axis=1)  # nb, 1, nx
             shift_t += delta_tt
             meta["tt_dt"] = delta_tt
 
         meta["cc_max"] = max_cc
         meta["cc_weight"] = weight
+        meta["cc_contrast"] = contrast
+        meta["cc_peak_lag"] = peak_lag
         meta["cc_dt"] = shift_t
         meta["cc_shift"] = shift_idx  ## cc window shift
+        meta["cc_peaks_shift"] = np.where(found, peaks_shift, np.nan)[..., 1:]  # the lesser peaks, nb, 1, nx, k - 1
+        meta["cc_peaks_cc"] = np.where(found, peaks_cc, np.nan)[..., 1:]
 
         return meta
 

@@ -255,7 +255,7 @@ class CCIterableDataset(IterableDataset):
         """
         Assume pair_list is a list of pairs of event indices
         """
-        pair_list = np.loadtxt(pair_list, delimiter=",", dtype=np.int64)
+        pair_list = np.load(pair_list) if pair_list.endswith(".npy") else np.loadtxt(pair_list, delimiter=",", dtype=np.int64)  # (n, 2) int64
         # For TEST
         # pair_list = np.array(list(itertools.product(range(6000), range(6000))))
         # pair_list = pair_list[pair_list[:, 0] < pair_list[:, 1]]
@@ -266,8 +266,8 @@ class CCIterableDataset(IterableDataset):
         print(f"Number of pairs: {total_pairs}, list1: {len(unique_row)}, list2: {len(unique_col)}")
 
         rows, cols = pair_list[:, 0], pair_list[:, 1]
-        data = [True] * len(pair_list)
-        shape = (max(rows) + 1, max(cols) + 1)
+        data = np.ones(len(pair_list), dtype=bool)
+        shape = (rows.max() + 1, cols.max() + 1)
         pair_matrix = coo_matrix((data, (rows, cols)), shape=shape, dtype=bool)
         pair_matrix = pair_matrix.tocsr()
 
@@ -312,7 +312,36 @@ class CCIterableDataset(IterableDataset):
             num_workers = worker_info.num_workers
             worker_id = worker_info.id
 
-        return iter(self.sample(self.block_index[worker_id::num_workers]))
+        block_index = self.block_index[worker_id::num_workers]
+        if self.mode == "CC" and self.data_format1 == "memmap":
+            return iter(self.sample_templates(block_index))
+        return iter(self.sample(block_index))
+
+    def sample_templates(self, block_index):
+        """CC of template pairs from one memmap: a batch is one index operation per side, no loop over pairs"""
+        for i, j in block_index:
+            templates = info = None  # free the previous block before loading the next
+            row_index, col_index = self.group1[i], self.group2[j]
+            rows = self.row_matrix[row_index, :][:, col_index].tocoo().data
+            cols = self.col_matrix[row_index, :][:, col_index].tocoo().data
+
+            ## the block's picks, sorted so the memmap is read in ascending offset
+            picks, local = np.unique(np.concatenate([rows, cols]), return_inverse=True)
+            local = local.reshape(2, -1)  # position in the block of each pair's two picks
+            templates = torch.as_tensor(self.templates[picks], dtype=self.dtype).to(self.device)  # (npick, nc, nx, nt)
+            info = {key: self.data_list1.loc[picks, key].values for key in ("idx_eve", "idx_sta", "phase_type")}
+            info["traveltime"] = self.traveltime[picks]
+            if self.template_mask is not None:
+                info["template_mask"] = self.template_mask[picks]
+
+            for k in range(0, len(rows), self.batch_size):
+                batch = []
+                for index in local[:, k : k + self.batch_size]:
+                    data = templates[torch.from_numpy(index)]  # (nb, nc, nx, nt), a copy
+                    if self.transforms is not None:
+                        data = self.transforms(data)
+                    batch.append({"data": data, "index": picks[index], "info": {key: x[index] for key, x in info.items()}})
+                yield tuple(batch)
 
     def cache_data(self, local_dict, ii, to_device=False):
         if self.data_list1.loc[ii, "file_name"] not in local_dict:
