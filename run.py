@@ -508,15 +508,10 @@ def main(args):
                 result_df.drop(columns=["network_station"], inplace=True)
 
                 # %% filter based on cc observations
-                result_df = (
-                    result_df.groupby(["idx_eve1", "idx_eve2"])
-                    .apply(
-                        lambda x: (x.nlargest(ccconfig.max_obs, "weight") if len(x) >= ccconfig.min_obs else None),
-                        include_groups=False,
-                    )
-                    .droplevel(-1)
-                    .reset_index()
-                )
+                ## the max_obs heaviest times of every event pair with at least min_obs
+                result_df = result_df[result_df.groupby(["idx_eve1", "idx_eve2"])["weight"].transform("size") >= ccconfig.min_obs]
+                result_df = result_df.sort_values(["idx_eve1", "idx_eve2", "weight"], ascending=[True, True, False])
+                result_df = result_df.groupby(["idx_eve1", "idx_eve2"]).head(ccconfig.max_obs)
 
                 # %%
                 event_idx_dict = events["event_index"].to_dict()  ##  faster than using .loc
